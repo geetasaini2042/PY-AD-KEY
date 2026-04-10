@@ -20,7 +20,7 @@ db = client['tokens_database']
 collection = db['kv_store']
 DB_KEY = "tokens_data"
 
-@app.route('/api/handler', methods=['GET', 'POST', 'OPTIONS'])
+@app.route('/auth-Key/generate-token/', methods=['GET', 'POST', 'OPTIONS'])
 def handler():
     # OPTIONS रिक्वेस्ट के लिए 200 स्टेटस लौटाएं
     if request.method == 'OPTIONS':
@@ -124,7 +124,7 @@ def handler():
             "message": str(e)
         }), 200
 
-@app.route('/api/verify', methods=['GET', 'OPTIONS'])
+@app.route('/auth-Key/check-key/', methods=['GET', 'OPTIONS'])
 def verify_handler():
     # 1. CORS Headers और OPTIONS रिक्वेस्ट को हैंडल करना
     if request.method == 'OPTIONS':
