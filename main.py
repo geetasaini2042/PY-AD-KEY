@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, Response
 from flask_cors import CORS
 import requests
 import secrets
@@ -123,6 +123,70 @@ def handler():
             "status": "error",
             "message": str(e)
         }), 200
+
+@app.route('/api/verify', methods=['GET', 'OPTIONS'])
+def verify_handler():
+    # 1. CORS Headers और OPTIONS रिक्वेस्ट को हैंडल करना
+    if request.method == 'OPTIONS':
+        return Response(status=200)
+
+    # URL से 'verify' पैरामीटर लेना (जैसे: ?verify=xyz)
+    key_to_check = request.args.get('verify')
+    if key_to_check:
+        key_to_check = key_to_check.strip()
+
+    if not key_to_check:
+        return Response("No key provided", status=400, mimetype='text/plain')
+
+    # Database Keys
+    DB_KEY = "tokens_data" # Normal 24-hour tokens
+    UNLIMITED_DB_KEY = "unlimited_tokens_data" # Unlimited validity tokens
+
+    try:
+        # --- STEP 1: CHECK UNLIMITED TOKENS FIRST ---
+        u_doc = collection.find_one({"_id": UNLIMITED_DB_KEY})
+        u_data = u_doc.get("data", {}) if u_doc else {}
+        
+        if key_to_check in u_data:
+            return Response("Authorized", status=200, mimetype='text/plain')
+
+        # --- STEP 2: CHECK STANDARD 24-HOUR TOKENS ---
+        doc = collection.find_one({"_id": DB_KEY})
+        
+        if not doc or "data" not in doc:
+            return Response("No Database Found", status=404, mimetype='text/plain')
+
+        data = doc["data"]
+        found_entry = None
+        
+        # JSON डेटा में final_token को ढूँढें
+        for tracking_key, entry in data.items():
+            if entry.get("final_token") == key_to_check:
+                found_entry = entry
+                break # सही एंट्री मिलते ही लूप बंद कर दें
+
+        # अगर final_token डेटाबेस में मिल गया
+        if found_entry is not None:
+            # --- TIME CALCULATION LOGIC ---
+            current_time = datetime.now().timestamp()
+            # ISO फॉर्मेट से समय को पार्स करना (पिछले कोड के अनुसार)
+            created_time = datetime.fromisoformat(found_entry["created_at"]).timestamp()
+            
+            time_diff_seconds = current_time - created_time
+            hours_diff = time_diff_seconds / 3600 # सेकंड्स को घंटों में बदलें
+
+            # Verify Condition (Less than 24 Hours)
+            if hours_diff < 24:
+                return Response("Authorized", status=200, mimetype='text/plain')
+            else:
+                return Response("Expired", status=401, mimetype='text/plain')
+        else:
+            return Response("Invalid Key", status=404, mimetype='text/plain')
+
+    except Exception as e:
+        # किसी भी तरह की सर्वर एरर के लिए
+        return Response("Server Error: " + str(e), status=500, mimetype='text/plain')
+
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
