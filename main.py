@@ -15,6 +15,7 @@ CORS(app, resources={r"/*": {"origins": "*"}})
 # मोंगोडीबी यूआरआई (आप इसे एनवायरनमेंट वेरिएबल के रूप में सेट कर सकते हैं)
 DT_MON = os.getenv("DT_MON", "mongodb://localhost:27017/") 
 API_KEY = os.getenv("API_KEY", "") 
+FA_KEY = os.getenv("FA_KEY", "") 
 client = MongoClient(DT_MON)
 db = client['tokens_database']
 collection = db['kv_store']
@@ -211,6 +212,168 @@ def get_tokens_handler():
             "status": "error", 
             "message": "डेटा लोड करने में समस्या आई: " + str(e) 
         }), 500
+
+ALLOWED_REFERERS = ["shortxlinks.com", "arolinks.com"]
+FALLBACK_SHORTENER_API_URL = "https://arolinks.com.com/api"
+FALLBACK_SHORTENER_API_KEY = FA_KEY
+
+@app.route('/', methods=['GET', 'OPTIONS', 'POST', 'PUT', 'DELETE'])
+def redirect_handler():
+    # --- 0. फालतू रिक्वेस्ट ब्लॉक करें (OPTIONS, HEAD आदि) ---
+    if request.method == 'OPTIONS':
+        resp = make_response('', 204)
+        resp.headers['Access-Control-Allow-Origin'] = '*'
+        resp.headers['Access-Control-Allow-Methods'] = 'GET, OPTIONS'
+        return resp
+        
+    if request.method != 'GET':
+        return get_html_error_page("Method Not Allowed", "This endpoint only supports GET requests.", "🛑", 405)
+        
+    if 'favicon.ico' in request.path:
+        return make_response('', 204)
+
+    try:
+        token = request.args.get('token')
+        if not token:
+            return get_html_error_page("Invalid Request", "Token is missing from the URL. Please check your link.", "❓", 400)
+
+        # --- आईपी निकालने का लॉजिक (IPv4 को प्राथमिकता) ---
+        cf_ip = request.headers.get("CF-Connecting-IP", "")
+        xff_ips = request.headers.get("X-Forwarded-For", "")
+        
+        all_ips = []
+        if cf_ip: 
+            all_ips.append(cf_ip.strip())
+        for ip in xff_ips.split(","):
+            if ip.strip(): 
+                all_ips.append(ip.strip())
+
+        final_ip = "Unknown IP"
+        ipv4 = next((ip for ip in all_ips if "." in ip), None) # पहले IPv4 ढूँढें
+        ipv6 = next((ip for ip in all_ips if ":" in ip), None) # फिर IPv6 ढूँढें
+
+        if ipv4:
+            final_ip = ipv4
+        elif ipv6:
+            final_ip = ipv6
+
+        # क्लाउडफ्लेयर हेडर से यूज़र का देश (Country) निकालना
+        user_country = request.headers.get("CF-IPCountry", "XX")
+        referer = request.headers.get("Referer", "")
+
+        # आज की तारीख निकालें (IST Timezone)
+        tz_kolkata = pytz.timezone('Asia/Kolkata')
+        d = datetime.now(tz_kolkata)
+        today_date = d.strftime('%Y-%m-%d')
+
+        # कुकी चेक करें
+        cookie_header = request.headers.get("Cookie", "")
+        has_today_cookie = f"visited_date={today_date}" in cookie_header
+
+        # --- स्टेप 1: इंडिया ट्रैफिक चेक ---
+        if user_country != "IN" and final_ip != "Unknown IP":
+            return get_html_error_page(
+                "Access Restricted", 
+                "It looks like you are using a VPN, Proxy. Please disable your VPN or Proxy connection and try again.", 
+                "🌍🚫", 
+                403
+            )
+
+        # --- स्टेप 2: रिफ़रर चेक ---
+        is_valid_referer = False
+        if referer:
+            for allowed in ALLOWED_REFERERS:
+                if allowed in referer:
+                    is_valid_referer = True
+                    break
+                    
+        if not is_valid_referer:
+            return get_html_error_page("Access Denied", "A bypass detected. Please use the original link.", "🛡️", 403)
+
+        # --- स्टेप 3: DB से वेरिफिकेशन (सीधे MongoDB से) ---
+        DB_KEY = "tokens_data"
+        doc = collection.find_one({"_id": DB_KEY})
+        db_data = doc.get("data", {}) if doc else {}
+        token_data = db_data.get(token)
+
+        # आईपी मैच चेक
+        ip_matches = False
+        if token_data and token_data.get("ip"):
+            ip_matches = token_data["ip"] in all_ips
+
+        redirect_url = ""
+        if not token_data or not ip_matches:
+            fallback_url = token_data.get("main_url") if token_data and token_data.get("main_url") else "https://your-default-fallback.com"
+            redirect_url = generate_fallback_link(fallback_url, FALLBACK_SHORTENER_API_URL, FALLBACK_SHORTENER_API_KEY)
+        else:
+            redirect_url = token_data["main_url"]
+
+        # --- स्टेप 4: रिडायरेक्ट रिस्पॉन्स तैयार करें और कुकी सेट करें ---
+        response = make_response(redirect(redirect_url, code=302))
+
+        # अगर आज की कुकी नहीं है तो उसे सेट करें
+        if not has_today_cookie:
+            response.set_cookie('visited_date', today_date, max_age=86400, path='/', httponly=True, samesite='Lax')
+
+        return response
+
+    except Exception as e:
+        return get_html_error_page("Server Error", "Something went wrong. Please try again later.", "⚙️", 500)
+
+
+# =====================================================================
+# HELPER FUNCTIONS 
+# =====================================================================
+
+def get_html_error_page(title, message, icon="⚠️", status_code=400):
+    """
+    सभी प्रकार के एरर को सुंदर HTML फॉर्मेट में दिखाने के लिए डायनेमिक फंक्शन।
+    """
+    html = f"""
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>{title}</title>
+        <style>
+            body {{ font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f8f9fa; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; color: #333; }}
+            .container {{ background-color: #fff; padding: 40px; border-radius: 10px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); text-align: center; max-width: 500px; width: 90%; }}
+            .icon {{ font-size: 60px; color: #dc3545; margin-bottom: 20px; }}
+            h1 {{ font-size: 24px; margin-bottom: 15px; color: #212529; }}
+            p {{ font-size: 16px; line-height: 1.5; color: #6c757d; margin-bottom: 25px; }}
+            .btn {{ background-color: #0d6efd; color: white; border: none; padding: 12px 25px; font-size: 16px; border-radius: 5px; cursor: pointer; text-decoration: none; transition: background-color 0.3s; display: inline-block; }}
+            .btn:hover {{ background-color: #0b5ed7; }}
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="icon">{icon}</div>
+            <h1>{title}</h1>
+            <p>{message}</p>
+            <button class="btn" onclick="window.location.reload();">Try Again</button>
+        </div>
+    </body>
+    </html>
+    """
+    resp = make_response(html, status_code)
+    resp.headers['Content-Type'] = 'text/html;charset=UTF-8'
+    return resp
+
+
+def generate_fallback_link(destination_url, api_url, api_key):
+    try:
+        encoded_url = quote(destination_url)
+        request_url = f"{api_url}?api={api_key}&url={encoded_url}&format=json"
+        
+        response = requests.get(request_url)
+        data = response.json()
+        
+        if data and data.get('status') == 'success' and data.get('shortenedUrl'):
+            return data['shortenedUrl']
+        return destination_url
+    except Exception:
+        return destination_url
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
