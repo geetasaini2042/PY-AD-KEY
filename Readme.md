@@ -2,4 +2,5 @@
 ```
 DT_MON=
 API_KEY=
+FA_KEY
 ```
