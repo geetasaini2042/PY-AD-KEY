@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, Response
+from flask import Flask, request, jsonify, Response, redirect, make_response
 from flask_cors import CORS
 import requests
 import secrets
@@ -7,7 +7,9 @@ import pytz
 from pymongo import MongoClient
 from urllib.parse import quote, urlparse
 import os
+from urllib.parse import quote
 
+# --- 1. कॉन्फ़िगरेशन (Configuration) ---
 app = Flask(__name__)
 # CORS हैंडलिंग
 CORS(app, resources={r"/*": {"origins": "*"}})
