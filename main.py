@@ -7,7 +7,7 @@ import pytz
 from pymongo import MongoClient
 from urllib.parse import quote, urlparse
 import os
-from urllib.parse import quote
+import random
 
 # --- 1. कॉन्फ़िगरेशन (Configuration) ---
 app = Flask(__name__)
