@@ -459,6 +459,53 @@ def get_folders():
         return Response(status=205)
         
     return jsonify(output_data)
-
+@app.route('/api/subjects', methods=['GET'])
+def get_subjects():
+    # डिफ़ॉल्ट रूप से 'root' फ़ोल्डर को पैरेंट मानेंगे, आप इसे URL से बदल भी सकते हैं
+    parent_id = request.args.get('parent_id', 'root')
+    
+    try:
+        resp = requests.get(DATA_URL)
+        raw_data = resp.json()
+    except Exception as e:
+        return jsonify({"error": "Failed to fetch data from source"}), 500
+        
+    root_node = raw_data.get("data", {})
+    target_folder = find_folder(root_node, parent_id)
+    
+    if not target_folder:
+        return Response(status=205)
+        
+    subjects_data = []
+    
+    for item in target_folder.get("items", []):
+        # हम मान रहे हैं कि Subjects फ़ोल्डर के रूप में हैं
+        if item.get("type") == "folder":
+            subject_name = item.get("name", "Unknown")
+            
+            # 1. नाम के पहले 3 अक्षर निकालना (बड़े अक्षरों में)
+            # अगर नाम 3 अक्षरों से छोटा है तो 'X' जोड़ देंगे (जैसे IT -> ITX)
+            prefix = subject_name[:3].upper() if len(subject_name) >= 3 else subject_name.upper().ljust(3, 'X')
+            
+            # 2. 100-110 और 200-210 के बीच का रैंडम नंबर जनरेट करना
+            possible_numbers = list(range(100, 111)) + list(range(200, 211))
+            random_num = random.choice(possible_numbers)
+            
+            # 3. सब्जेक्ट कोड बनाना
+            subject_code = f"{prefix}-{random_num}"
+            
+            subjects_data.append({
+                "subject_id": item.get("id"),
+                "subject_name": subject_name,
+                "subject_code": subject_code,
+                "image_url": "https://study.lnkz.tech/default.png"
+            })
+            
+    # अगर उस फ़ोल्डर में कोई विषय नहीं मिला तो 205 स्टेटस भेजें
+    if not subjects_data:
+        return Response(status=205)
+        
+    return jsonify(subjects_data)
+    
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
