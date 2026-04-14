@@ -451,7 +451,8 @@ def get_folders():
                 "id": item.get("id"),
                 "name": item.get("name", "Unnamed"),
                 "type": item_type,
-                "details": details
+                "details": details,
+                "fileUrl" : "https://www.orimi.com/pdf-test.pdf"
             })
             
     # अगर फ़ोल्डर में कोई डिस्क्रिप्शन भी नहीं है और कोई file/folder भी नहीं है, तो 205 भेजें
