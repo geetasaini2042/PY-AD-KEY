@@ -446,14 +446,24 @@ def get_folders():
                     details = f"{inner_items} Items inside"
                 else:
                     details = item.get("caption", "Document")
-                    
-            output_data.append({
+            if item_type == "file":
+                fileUrl =  item.get("file_url", "https://freetestdata.com/wp-content/uploads/2025/04/15-MB.pdf")
+                output_data.append({
                 "id": item.get("id"),
                 "name": item.get("name", "Unnamed"),
                 "type": item_type,
                 "details": details,
-                "fileUrl" : "https://www.orimi.com/pdf-test.pdf"
+                "fileUrl" : fileUrl
             })
+            else:
+                output_data.append({
+                "id": item.get("id"),
+                "name": item.get("name", "Unnamed"),
+                "type": item_type,
+                "details": details                
+            })
+                    
+            
             
     # अगर फ़ोल्डर में कोई डिस्क्रिप्शन भी नहीं है और कोई file/folder भी नहीं है, तो 205 भेजें
     if valid_items_count == 0 and not target_folder.get("description"):
