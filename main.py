@@ -216,7 +216,7 @@ def get_tokens_handler():
         }), 500
 
 ALLOWED_REFERERS = ["shortxlinks.com", "arolinks.com"]
-FALLBACK_SHORTENER_API_URL = "https://arolinks.com.com/api"
+FALLBACK_SHORTENER_API_URL = "https://arolinks.com/api"
 FALLBACK_SHORTENER_API_KEY = FA_KEY
 
 @app.route('/', methods=['GET', 'OPTIONS', 'POST', 'PUT', 'DELETE'])
