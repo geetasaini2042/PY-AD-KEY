@@ -396,7 +396,93 @@ def find_folder(current_node, target_id):
                 return result
                 
     return None
+@app.route('/api/folders', methods=['GET'])
+def get_folders():
+    # फ्रंटएंड से folder_id प्राप्त करें, अगर न हो तो 'root' मान लें
+    folder_id = request.args.get('folder_id', 'root')
+    
+    try:
+        # बाहरी URL से डेटा लाएँ
+        resp = requests.get(DATA_URL)
+        raw_data = resp.json()
+    except Exception as e:
+        return jsonify({"error": "Failed to fetch data from source"}), 500
+        
+    root_node = raw_data.get("data", {})
+    
+    # माँगा गया फ़ोल्डर खोजें
+    target_folder = find_folder(root_node, folder_id)
+    
+    # अगर फ़ोल्डर ही नहीं मिला, तो 205 स्टेटस भेजें
+    if not target_folder:
+        return Response(status=205)
+        
+    output_data = []
+    
+    # 1. अगर फ़ोल्डर का कोई डिस्क्रिप्शन है, तो उसे 'description' टाइप के रूप में सबसे ऊपर जोड़ें
+    if target_folder.get("description"):
+        output_data.append({
+            "id": f"desc_{folder_id}",
+            "name": f"About {target_folder.get('name', 'This Section')}",
+            "type": "description",
+            "details": target_folder.get("description")
+        })
+        
+    # 2. अब फ़ोल्डर के अंदर के आइटम्स को प्रोसेस करें (केवल file और folder)
+    valid_items_count = 0
+    for item in target_folder.get("items", []):
+        item_type = item.get("type")
+        item_id = item.get("id")
+        
+        # सिर्फ 'folder' और 'file' को ही अनुमति दें
+        if item_type in ["folder", "file"]:
+            valid_items_count += 1
+            
+            # डिटेल्स सेट करें (अगर डिस्क्रिप्शन है तो वो, वरना डिफ़ॉल्ट)
+            details = item.get("description")
+            if not details:
+                if item_type == "folder":
+                    inner_items = len(item.get("items", []))
+                    details = f"{inner_items} Items inside"
+                else:
+                    details = item.get("caption", "Document")
+                    
+            if item_type == "file":
+                file_url = item.get("file_url")
+                
+                # फाइल का बेसिक डेटा
+                file_data = {
+                    "id": item_id,
+                    "name": item.get("name", "Unnamed"),
+                    "type": item_type,
+                    "details": details
+                }
+                
+                # अगर file_url है (खाली नहीं है), तो उसे सेट करें
+                if file_url:
+                    file_data["fileUrl"] = file_url
+                else:
+                    # अगर file_url नहीं है, तो open_url जनरेट करें
+                    file_data["fileUrl"] = ""
+                    file_data["open_url"] = f"https://t.me/Rajasthan_UniversityBot?start={item_id}"
+                    
+                output_data.append(file_data)
+                
+            else:
+                output_data.append({
+                    "id": item_id,
+                    "name": item.get("name", "Unnamed"),
+                    "type": item_type,
+                    "details": details                
+                })
+                    
+    # अगर फ़ोल्डर में कोई डिस्क्रिप्शन भी नहीं है और कोई file/folder भी नहीं है, तो 205 भेजें
+    if valid_items_count == 0 and not target_folder.get("description"):
+        return Response(status=205)
+        
+    return jsonify(output_data)
 
+"""
 @app.route('/api/folders', methods=['GET'])
 def get_folders():
     # फ्रंटएंड से folder_id प्राप्त करें, अगर न हो तो 'root' मान लें
@@ -470,6 +556,8 @@ def get_folders():
         return Response(status=205)
         
     return jsonify(output_data)
+"""
+
 @app.route('/api/subjects', methods=['GET'])
 def get_subjects():
     # डिफ़ॉल्ट रूप से 'root' फ़ोल्डर को पैरेंट मानेंगे, आप इसे URL से बदल भी सकते हैं
