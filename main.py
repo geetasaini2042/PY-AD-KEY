@@ -190,7 +190,7 @@ def verify_handler():
         # किसी भी तरह की सर्वर एरर के लिए
         return Response("Server Error: " + str(e), status=500, mimetype='text/plain')
 @app.route('/auth-Key/generate-token/app1/', methods=['GET', 'POST', 'OPTIONS'])
-def handler_app():
+def handler_app1():
     # OPTIONS रिक्वेस्ट के लिए 200 स्टेटस लौटाएं
     if request.method == 'OPTIONS':
         return '', 200
@@ -518,7 +518,7 @@ FALLBACK_SHORTENER_API_URL = "https://arolinks.com/api"
 FALLBACK_SHORTENER_API_KEY = FA_KEY
 
 @app.route('/app/', methods=['GET', 'OPTIONS', 'POST', 'PUT', 'DELETE'])
-def app_token_handler():
+def app_token_handler12():
     # --- 0. फालतू रिक्वेस्ट ब्लॉक करें (OPTIONS, HEAD आदि) ---
     if request.method == 'OPTIONS':
         resp = make_response('', 204)
