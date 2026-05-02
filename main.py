@@ -302,6 +302,120 @@ def handler_app():
             "status": "error",
             "message": str(e)
         }), 200
+        
+@app.route('/auth-Key/generate-token/app/', methods=['GET', 'POST', 'OPTIONS'])
+def handler_app():
+    # OPTIONS रिक्वेस्ट के लिए 200 स्टेटस लौटाएं
+    if request.method == 'OPTIONS':
+        return '', 200
+
+    try:
+        # ऐप सिग्नेचर हेडर से लेना
+        app_signature = request.headers.get('X-App-Signature')
+        if not app_signature:
+            return jsonify({
+                "status": "error",
+                "message": "App Signature is missing"
+            }), 400
+
+        user_ip = request.headers.get('X-Forwarded-For', request.remote_addr or 'unknown')
+        if ',' in user_ip:
+            user_ip = user_ip.split(',')[0].strip()
+            
+        current_time = datetime.now().timestamp()
+
+        # मोंगोडीबी से डेटा पढ़ना
+        doc = collection.find_one({"_id": DB_KEY})
+        current_data = doc.get("data", {}) if doc else {}
+
+        tz_kolkata = pytz.timezone('Asia/Kolkata')
+        
+        # 1. चेक करें कि क्या यूज़र (उसी ऐप सिग्नेचर) की कोई एक्टिव की (Key) है (24 घंटे से कम पुरानी)
+        for token, entry in current_data.items():
+            if entry.get("app_signature") == app_signature:
+                created_time = datetime.fromisoformat(entry["created_at"]).timestamp()
+                hours_diff = (current_time - created_time) / 3600
+
+                if hours_diff < 24:
+                    return jsonify({
+                        "status": "success",
+                        "url": entry["short_url"],
+                        "message": "Active session found"
+                    }), 200
+
+        # 2. एक्सपायर हो चुकी की (Key) को रीयूज़ (Reuse) करना
+        reused_token = None
+        date_time_now = datetime.now(tz_kolkata).isoformat()
+
+        for token, entry in current_data.items():
+            created_time = datetime.fromisoformat(entry["created_at"]).timestamp()
+            hours_diff = (current_time - created_time) / 3600
+
+            if hours_diff >= 24:
+                entry["ip"] = user_ip
+                entry["app_signature"] = app_signature # नया सिग्नेचर अपडेट करें
+                entry["created_at"] = date_time_now
+                entry["status"] = "active"
+                reused_token = token
+                break
+
+        # अगर पुरानी की रीयूज़ हो गई है
+        if reused_token:
+            collection.update_one({"_id": DB_KEY}, {"$set": {"data": current_data}}, upsert=True)
+            return jsonify({
+                "status": "success",
+                "url": current_data[reused_token]["short_url"],
+                "message": "Generation successful (Reused)"
+            }), 200
+
+        # 3. नई की (Key) बनाना (अगर कोई पुरानी या एक्सपायर की नहीं मिली)
+        tracking_token = secrets.token_hex(16)
+        final_token = secrets.token_hex(16)
+
+        referer = request.headers.get('Referer') or request.headers.get('Origin')
+        if referer:
+            parsed_url = urlparse(referer)
+            main_website_url = f"{parsed_url.scheme}://{parsed_url.netloc}/auth?token={final_token}"
+        else:
+            protocol = request.headers.get('X-Forwarded-Proto', 'http')
+            main_website_url = f"{protocol}://{request.host}/auth?token={final_token}"
+
+        tracking_api_url = f"https://key.lnkz.tech/app/?token={tracking_token}"
+        api_url = f"https://arolinks.com/api?api={FA_KEY}&url={quote(tracking_api_url)}&format=json"
+        
+        api_response = requests.get(api_url, headers={'User-Agent': 'Mozilla/5.0'})
+        json_response = api_response.json()
+
+        if json_response.get('status') == 'success':
+            shortened_url = json_response.get('shortenedUrl')
+
+            current_data[tracking_token] = {
+                "ip": user_ip,
+                "app_signature": app_signature, # सिग्नेचर डेटाबेस में सेव करें
+                "created_at": date_time_now,
+                "short_url": shortened_url,
+                "tracking_url": tracking_api_url,
+                "main_url": main_website_url,
+                "final_token": final_token,
+                "status": "active"
+            }
+
+            # मोंगोडीबी में डेटा सेव करना
+            collection.update_one({"_id": DB_KEY}, {"$set": {"data": current_data}}, upsert=True)
+
+            return jsonify({
+                "status": "success",
+                "url": shortened_url,
+                "message": "Generated new key"
+            }), 200
+        else:
+            raise Exception(json_response.get('message', 'Shortener API Failure'))
+
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 200
 
 @app.route('/auth-Key/check-key/app/', methods=['GET', 'OPTIONS'])
 def verify_handler_app():
@@ -402,6 +516,188 @@ def get_tokens_handler():
 ALLOWED_REFERERS = ["shortxlinks.com", "arolinks.com"]
 FALLBACK_SHORTENER_API_URL = "https://arolinks.com/api"
 FALLBACK_SHORTENER_API_KEY = FA_KEY
+
+@app.route('/app/', methods=['GET', 'OPTIONS', 'POST', 'PUT', 'DELETE'])
+def app_token_handler():
+    # --- 0. फालतू रिक्वेस्ट ब्लॉक करें (OPTIONS, HEAD आदि) ---
+    if request.method == 'OPTIONS':
+        resp = make_response('', 204)
+        resp.headers['Access-Control-Allow-Origin'] = '*'
+        resp.headers['Access-Control-Allow-Methods'] = 'GET, OPTIONS'
+        return resp
+        
+    if request.method != 'GET':
+        return get_html_error_page("Method Not Allowed", "This endpoint only supports GET requests.", "🛑", 405)
+        
+    if 'favicon.ico' in request.path:
+        return make_response('', 204)
+
+    try:
+        token = request.args.get('token')
+        if not token:
+            return get_html_error_page("Invalid Request", "Token is missing from the URL. Please check your link.", "❓", 400)
+
+        # --- आईपी निकालने का लॉजिक (IPv4 को प्राथमिकता) ---
+        cf_ip = request.headers.get("CF-Connecting-IP", "")
+        xff_ips = request.headers.get("X-Forwarded-For", "")
+        
+        all_ips = []
+        if cf_ip: 
+            all_ips.append(cf_ip.strip())
+        for ip in xff_ips.split(","):
+            if ip.strip(): 
+                all_ips.append(ip.strip())
+
+        final_ip = "Unknown IP"
+        ipv4 = next((ip for ip in all_ips if "." in ip), None)
+        ipv6 = next((ip for ip in all_ips if ":" in ip), None)
+
+        if ipv4:
+            final_ip = ipv4
+        elif ipv6:
+            final_ip = ipv6
+
+        # क्लाउडफ्लेयर हेडर से यूज़र का देश (Country) निकालना
+        user_country = request.headers.get("CF-IPCountry", "XX")
+        referer = request.headers.get("Referer", "")
+
+        # आज की तारीख निकालें (IST Timezone)
+        tz_kolkata = pytz.timezone('Asia/Kolkata')
+        d = datetime.now(tz_kolkata)
+        today_date = d.strftime('%Y-%m-%d')
+
+        cookie_header = request.headers.get("Cookie", "")
+        has_today_cookie = f"visited_date={today_date}" in cookie_header
+
+        # --- स्टेप 1: इंडिया ट्रैफिक चेक ---
+        if user_country != "IN" and final_ip != "Unknown IP":
+            return get_html_error_page(
+                "Access Restricted", 
+                "It looks like you are using a VPN or Proxy. Please disable it and try again.", 
+                "🌍🚫", 
+                403
+            )
+
+        # --- स्टेप 2: रिफ़रर चेक ---
+        is_valid_referer = False
+        if referer:
+            for allowed in ALLOWED_REFERERS:
+                if allowed in referer:
+                    is_valid_referer = True
+                    break
+                    
+        if not is_valid_referer:
+            return get_html_error_page("Access Denied", "A bypass detected. Please use the original link.", "🛡️", 403)
+
+        # --- स्टेप 3: DB से वेरिफिकेशन (सीधे MongoDB से) ---
+        DB_KEY = "tokens_data"
+        doc = collection.find_one({"_id": DB_KEY})
+        db_data = doc.get("data", {}) if doc else {}
+        token_data = db_data.get(token)
+
+        # आईपी मैच चेक
+        ip_matches = False
+        if token_data and token_data.get("ip"):
+            ip_matches = token_data["ip"] in all_ips
+
+        # अगर टोकन नहीं मिला या आईपी मैच नहीं हुआ
+        if not token_data or not ip_matches:
+            return get_html_error_page("Verification Failed", "Token is invalid, expired, or IP address mismatch. Please generate a new link.", "❌", 403)
+
+        # फाइनल टोकन (App के लिए) निकालें
+        final_token = token_data.get("final_token", "Error: Token Not Found")
+
+        # --- स्टेप 4: स्क्रीन पर टोकन दिखाने वाला HTML तैयार करें ---
+        html_content = f"""
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>Your Access Token</title>
+            <style>
+                @import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600&display=swap');
+                body, html {{
+                    margin: 0; padding: 0; width: 100%; height: 100%; display: flex;
+                    align-items: center; justify-content: center; background: #0f172a;
+                    font-family: 'Montserrat', sans-serif; overflow: hidden;
+                }}
+                .blob {{ position: absolute; border-radius: 50%; filter: blur(60px); z-index: 0; animation: float 8s infinite ease-in-out alternate; }}
+                .blob-1 {{ width: 300px; height: 300px; background: #3b82f6; top: -100px; left: -100px; }}
+                .blob-2 {{ width: 250px; height: 250px; background: #8b5cf6; bottom: -50px; right: -50px; animation-delay: -4s; }}
+                
+                .glass-container {{
+                    position: relative; z-index: 1; background: rgba(255, 255, 255, 0.05);
+                    backdrop-filter: blur(15px); -webkit-backdrop-filter: blur(15px);
+                    border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 24px;
+                    padding: 40px 50px; text-align: center; box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+                    width: 100%; max-width: 350px;
+                }}
+                .welcome-text {{ color: #ffffff; font-size: 24px; font-weight: 600; letter-spacing: 2px; text-transform: uppercase; margin-bottom: 8px; }}
+                .sub-text {{ color: #10b981; font-size: 14px; letter-spacing: 1px; margin-bottom: 25px; }}
+                
+                .key-input {{
+                    width: 100%; padding: 12px 15px; border-radius: 8px;
+                    border: 1px solid rgba(255, 255, 255, 0.2); background: rgba(0, 0, 0, 0.3);
+                    color: #fff; font-size: 16px; outline: none; box-sizing: border-box;
+                    font-family: 'Montserrat', sans-serif; text-align: center; letter-spacing: 1px;
+                }}
+                
+                .btn {{
+                    width: 100%; padding: 12px; border-radius: 8px; font-size: 14px; font-weight: 600;
+                    cursor: pointer; border: none; background: linear-gradient(90deg, #3b82f6, #8b5cf6);
+                    color: white; box-shadow: 0 4px 15px rgba(59, 130, 246, 0.3); transition: all 0.3s ease;
+                    font-family: 'Montserrat', sans-serif; margin-top: 15px;
+                }}
+                .btn:hover {{ opacity: 0.9; transform: translateY(-2px); }}
+                
+                @keyframes float {{
+                    0% {{ transform: translate(0, 0) scale(1); }}
+                    100% {{ transform: translate(30px, 50px) scale(1.1); }}
+                }}
+            </style>
+        </head>
+        <body>
+            <div class="blob blob-1"></div>
+            <div class="blob blob-2"></div>
+            <div class="glass-container">
+                <div class="welcome-text">Success ✅</div>
+                <div class="sub-text">Verification Complete.</div>
+                
+                <input type="text" id="token-input" class="key-input" value="{final_token}" readonly>
+                <button id="copy-btn" class="btn" onclick="copyToken()">Copy Key</button>
+            </div>
+
+            <script>
+                function copyToken() {{
+                    var copyText = document.getElementById("token-input");
+                    copyText.select();
+                    copyText.setSelectionRange(0, 99999); /* मोबाइल के लिए */
+                    navigator.clipboard.writeText(copyText.value).then(() => {{
+                        var btn = document.getElementById("copy-btn");
+                        btn.innerText = "Copied! ✅";
+                        btn.style.background = "linear-gradient(90deg, #10b981, #059669)";
+                        setTimeout(() => {{ 
+                            btn.innerText = "Copy Key"; 
+                            btn.style.background = "linear-gradient(90deg, #3b82f6, #8b5cf6)";
+                        }}, 2500);
+                    }});
+                }}
+            </script>
+        </body>
+        </html>
+        """
+
+        response = make_response(html_content)
+
+        # अगर आज की कुकी नहीं है तो उसे सेट करें
+        if not has_today_cookie:
+            response.set_cookie('visited_date', today_date, max_age=86400, path='/', httponly=True, samesite='Lax')
+
+        return response
+
+    except Exception as e:
+        return get_html_error_page("Server Error", f"Something went wrong: {str(e)}", "⚙️", 500)
 
 @app.route('/', methods=['GET', 'OPTIONS', 'POST', 'PUT', 'DELETE'])
 def redirect_handler():
