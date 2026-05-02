@@ -700,6 +700,30 @@ def get_tokens_handler():
             "status": "error", 
             "message": "डेटा लोड करने में समस्या आई: " + str(e) 
         }), 500
+@app.route('/api/app/get_tokens', methods=['GET', 'OPTIONS'])
+def get_app_tokens_handler():
+    # OPTIONS रिक्वेस्ट को हैंडल करना
+    if request.method == 'OPTIONS':
+        return '', 200
+
+    DB_KEY = "app_tokens_data"
+
+    try:
+        # मोंगोडीबी से पूरा डेटा प्राप्त करना
+        doc = collection.find_one({"_id": DB_KEY})
+        
+        # अगर डेटा मौजूद है तो उसे निकालें, वरना खाली डिक्शनरी दें
+        all_tokens = doc.get("data", {}) if doc else {}
+
+        # डेटा को बिल्कुल tokens.json की तरह JSON फॉर्मेट में भेजना
+        return jsonify(all_tokens), 200
+
+    except Exception as e:
+        # किसी भी तरह की एरर आने पर
+        return jsonify({ 
+            "status": "error", 
+            "message": "डेटा लोड करने में समस्या आई: " + str(e) 
+        }), 500
 
 ALLOWED_REFERERS = ["shortxlinks.com", "arolinks.com"]
 FALLBACK_SHORTENER_API_URL = "https://arolinks.com/api"
