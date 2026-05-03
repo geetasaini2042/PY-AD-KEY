@@ -803,7 +803,7 @@ def app_token_handler12():
           #  return get_html_error_page("Access Denied", "A bypass detected. Please use the original link.", "🛡️", 403)
 
         # --- स्टेप 3: DB से वेरिफिकेशन (सीधे MongoDB से) ---
-        DB_KEY = "tokens_data"
+        DB_KEY = "app_tokens_data"
         doc = collection.find_one({"_id": DB_KEY})
         db_data = doc.get("data", {}) if doc else {}
         token_data = db_data.get(token)
