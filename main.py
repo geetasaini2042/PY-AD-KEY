@@ -982,8 +982,8 @@ def redirect_handler():
                     is_valid_referer = True
                     break
                     
-        if not is_valid_referer:
-            return get_html_error_page("Access Denied", "A bypass detected. Please use the original link.", "🛡️", 403)
+       # if not is_valid_referer:
+          #  return get_html_error_page("Access Denied", "A bypass detected. Please use the original link.", "🛡️", 403)
 
         # --- स्टेप 3: DB से वेरिफिकेशन (सीधे MongoDB से) ---
         DB_KEY = "tokens_data"
