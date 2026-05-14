@@ -92,7 +92,7 @@ def handler():
             protocol = request.headers.get('X-Forwarded-Proto', 'http')
             main_website_url = f"{protocol}://{request.host}/auth?token={final_token}"
 
-        tracking_api_url = f"https://key.lnkz.tech/?token={tracking_token}"
+        tracking_api_url = f"https://study.edumate.life/?token={tracking_token}"
         api_url = f"https://arolinks.com/api?api={FA_KEY}&url={quote(tracking_api_url)}&format=json"
         
         api_response = requests.get(api_url, headers={'User-Agent': 'Mozilla/5.0'})
