@@ -8,7 +8,8 @@ from pymongo import MongoClient
 from urllib.parse import quote, urlparse
 import os
 import random
-
+APP_DB_KEY = "app1_tokens_data"
+APP_UNLIMITED_DB_KEY = "app_unlimited_tokens_data" 
 # --- 1. कॉन्फ़िगरेशन (Configuration) ---
 app = Flask(__name__)
 # CORS हैंडलिंग
@@ -493,10 +494,6 @@ def handler_app():
     # OPTIONS रिक्वेस्ट के लिए 200 स्टेटस लौटाएं
     if request.method == 'OPTIONS':
         return '', 200
-
-    # ऐप के लिए अलग डेटाबेस की (Key)
-    APP_DB_KEY = "app_tokens_data"
-
     try:
         # ऐप सिग्नेचर हेडर से लेना
         app_signature = request.headers.get('X-App-Signature')
@@ -624,10 +621,6 @@ def verify_handler_app():
     if not key_to_check:
         return Response("No key provided", status=400, mimetype='text/plain')
 
-    # ऐप के लिए अलग डेटाबेस कीज़ (Database Keys)
-    APP_DB_KEY = "app_tokens_data" 
-    APP_UNLIMITED_DB_KEY = "app_unlimited_tokens_data" 
-
     try:
         # --- STEP 1: CHECK UNLIMITED TOKENS FIRST ---
         u_doc = collection.find_one({"_id": APP_UNLIMITED_DB_KEY})
@@ -706,7 +699,7 @@ def get_app_tokens_handler():
     if request.method == 'OPTIONS':
         return '', 200
 
-    DB_KEY = "app_tokens_data"
+    DB_KEY = APP_DB_KEY
 
     try:
         # मोंगोडीबी से पूरा डेटा प्राप्त करना
@@ -803,7 +796,7 @@ def app_token_handler12():
           #  return get_html_error_page("Access Denied", "A bypass detected. Please use the original link.", "🛡️", 403)
 
         # --- स्टेप 3: DB से वेरिफिकेशन (सीधे MongoDB से) ---
-        DB_KEY = "app_tokens_data"
+        DB_KEY = APP_DB_KEY
         doc = collection.find_one({"_id": DB_KEY})
         db_data = doc.get("data", {}) if doc else {}
         token_data = db_data.get(token)
