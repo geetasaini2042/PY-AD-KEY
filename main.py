@@ -23,13 +23,6 @@ client = MongoClient(DT_MON)
 db = client['tokens_database']
 collection = db['kv_store']
 DB_KEY = "tokens_data"
-
-
-app = Flask(__name__)
-
-# =====================================================================
-# आपका मौजूदा डेटाबेस सेटअप (बिना किसी बदलाव के)
-# =====================================================================
 DT_MON = os.getenv("DT_MON", "mongodb://localhost:27017/") 
 API_KEY = os.getenv("API_KEY", "") 
 FA_KEY = os.getenv("FA_KEY", "") 
@@ -37,8 +30,6 @@ client = MongoClient(DT_MON)
 db = client['tokens_database']
 collection = db['kv_store']
 DB_KEY = "tokens_data"
-
-# नए प्रीमियम सिस्टम के लिए उसी डेटाबेस में नया कलेक्शन
 premium_collection = db['premium_tokens']
 
 @app.route('/get-time', methods=['GET', 'OPTIONS'])
@@ -62,8 +53,6 @@ def get_custom_time():
 
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
-
-#from flask import request, jsonify
 
 @app.route('/check-key-type', methods=['GET', 'OPTIONS'])
 def check_key_type():
@@ -94,9 +83,6 @@ def check_key_type():
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
-# =====================================================================
-# 1. एडमिन (Admin): प्रीमियम लिंक जनरेट करने का एंडपॉइंट
-# =====================================================================
 @app.route('/admin/generate-premium-link/', methods=['POST'])
 def generate_premium_link():
     try:
@@ -117,10 +103,8 @@ def generate_premium_link():
             "final_token": None,
             "is_saved": "no",          
             "app_device_id": None      
-        }
-        
+        } 
         premium_collection.insert_one(premium_data)
-        
         protocol = request.headers.get('X-Forwarded-Proto', 'http')
         auth_link = f"{protocol}://{request.host}/premium-auth?token={execute_token}"
         
