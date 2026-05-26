@@ -23,6 +23,291 @@ client = MongoClient(DT_MON)
 db = client['tokens_database']
 collection = db['kv_store']
 DB_KEY = "tokens_data"
+import os
+from flask import Flask, request, jsonify, render_template_string
+from datetime import datetime, timedelta
+import pytz
+import secrets
+from pymongo import MongoClient
+
+app = Flask(__name__)
+
+# =====================================================================
+# आपका मौजूदा डेटाबेस सेटअप (बिना किसी बदलाव के)
+# =====================================================================
+DT_MON = os.getenv("DT_MON", "mongodb://localhost:27017/") 
+API_KEY = os.getenv("API_KEY", "") 
+FA_KEY = os.getenv("FA_KEY", "") 
+client = MongoClient(DT_MON)
+db = client['tokens_database']
+collection = db['kv_store']
+DB_KEY = "tokens_data"
+
+# नए प्रीमियम सिस्टम के लिए उसी डेटाबेस में नया कलेक्शन
+premium_collection = db['premium_tokens']
+
+
+# =====================================================================
+# 1. एडमिन (Admin): प्रीमियम लिंक जनरेट करने का एंडपॉइंट
+# =====================================================================
+@app.route('/admin/generate-premium-link/', methods=['POST'])
+def generate_premium_link():
+    try:
+        data = request.get_json() if request.is_json else {}
+        validity_days = int(data.get('validity_days', 30))
+        
+        execute_token = secrets.token_urlsafe(16)
+        
+        tz_kolkata = pytz.timezone('Asia/Kolkata')
+        created_at = datetime.now(tz_kolkata).isoformat()
+        
+        premium_data = {
+            "execute_token": execute_token,
+            "status": "pending", 
+            "validity_days": validity_days,
+            "created_at": created_at,
+            "browser_fingerprint": None,
+            "final_token": None,
+            "is_saved": "no",          
+            "app_device_id": None      
+        }
+        
+        premium_collection.insert_one(premium_data)
+        
+        protocol = request.headers.get('X-Forwarded-Proto', 'http')
+        auth_link = f"{protocol}://{request.host}/premium-auth?token={execute_token}"
+        
+        return jsonify({
+            "status": "success",
+            "execute_token": execute_token,
+            "auth_link": auth_link,
+            "validity_days": validity_days,
+            "message": "Premium link generated successfully."
+        }), 200
+
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+# =====================================================================
+# 2. यूज़र इंटरफ़ेस (Frontend): ब्राउज़र में फिंगरप्रिंट बनाने वाला पेज
+# =====================================================================
+@app.route('/premium-auth', methods=['GET'])
+def premium_auth_page():
+    execute_token = request.args.get('token')
+    if not execute_token:
+        return "Invalid or Missing Token", 400
+
+    html_template = """
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Premium Access</title>
+        <style>
+            body { font-family: Arial, sans-serif; text-align: center; padding: 50px; background: #f4f7f6; }
+            .box { background: white; padding: 30px; border-radius: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); display: inline-block; }
+            #final-token { font-weight: bold; color: #2c3e50; font-size: 20px; margin: 20px 0; padding: 10px; background: #ecf0f1; border: 1px dashed #bdc3c7; word-break: break-all;}
+            button { padding: 10px 20px; font-size: 16px; cursor: pointer; background: #27ae60; color: white; border: none; border-radius: 5px; }
+        </style>
+    </head>
+    <body>
+        <div class="box">
+            <h2>Verifying Your Device...</h2>
+            <p id="status-text">Please wait while we generate your secure premium key.</p>
+            <div id="token-container" style="display:none;">
+                <p>Your Premium Token:</p>
+                <div id="final-token"></div>
+                <button onclick="copyToken()">Copy Token</button>
+            </div>
+        </div>
+
+        <script>
+            async function generateFingerprint() {
+                const canvas = document.createElement('canvas');
+                const ctx = canvas.getContext('2d');
+                ctx.textBaseline = "top";
+                ctx.font = "14px 'Arial'";
+                ctx.textBaseline = "alphabetic";
+                ctx.fillStyle = "#f60";
+                ctx.fillRect(125,1,62,20);
+                ctx.fillStyle = "#069";
+                ctx.fillText("Premium Fingerprint", 2, 15);
+                ctx.fillStyle = "rgba(102, 204, 0, 0.7)";
+                ctx.fillText("Premium Fingerprint", 4, 17);
+                
+                const canvasData = canvas.toDataURL();
+                const screenData = window.screen.width + "x" + window.screen.height + "-" + window.screen.colorDepth;
+                const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+                
+                const rawFingerprint = navigator.userAgent + screenData + timezone + canvasData;
+                
+                const msgBuffer = new TextEncoder().encode(rawFingerprint);
+                const hashBuffer = await crypto.subtle.digest('SHA-256', msgBuffer);
+                const hashArray = Array.from(new Uint8Array(hashBuffer));
+                const fingerprintHash = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+                
+                return fingerprintHash;
+            }
+
+            async function submitFingerprint() {
+                const fp = await generateFingerprint();
+                const execute_token = "{{ token }}";
+
+                fetch('/api/premium/verify-fingerprint/', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ execute_token: execute_token, fingerprint: fp })
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if(data.status === 'success') {
+                        document.getElementById('status-text').style.display = 'none';
+                        document.getElementById('token-container').style.display = 'block';
+                        document.getElementById('final-token').innerText = data.final_token;
+                    } else {
+                        document.getElementById('status-text').innerText = "Error: " + data.message;
+                        document.getElementById('status-text').style.color = "red";
+                    }
+                })
+                .catch(err => {
+                    document.getElementById('status-text').innerText = "Network Error!";
+                });
+            }
+
+            function copyToken() {
+                const token = document.getElementById('final-token').innerText;
+                navigator.clipboard.writeText(token);
+                alert("Token Copied!");
+            }
+
+            window.onload = submitFingerprint;
+        </script>
+    </body>
+    </html>
+    """
+    return render_template_string(html_template, token=execute_token)
+
+
+# =====================================================================
+# 3. बैकएंड (Backend): फिंगरप्रिंट सेव करना और फाइनल टोकन देना
+# =====================================================================
+@app.route('/api/premium/verify-fingerprint/', methods=['POST', 'OPTIONS'])
+def verify_premium_fingerprint():
+    if request.method == 'OPTIONS':
+        return '', 200
+
+    try:
+        data = request.get_json()
+        execute_token = data.get('execute_token')
+        fingerprint = data.get('fingerprint')
+
+        if not execute_token or not fingerprint:
+            return jsonify({"status": "error", "message": "Missing required data"}), 400
+
+        token_doc = premium_collection.find_one({"execute_token": execute_token})
+
+        if not token_doc:
+            return jsonify({"status": "error", "message": "Invalid link"}), 404
+
+        if token_doc.get("status") != "pending":
+            return jsonify({"status": "error", "message": "This link has already been used and is expired."}), 403
+
+        final_token = secrets.token_hex(20)
+        
+        tz_kolkata = pytz.timezone('Asia/Kolkata')
+        activated_at = datetime.now(tz_kolkata).isoformat()
+
+        premium_collection.update_one(
+            {"_id": token_doc["_id"]},
+            {"$set": {
+                "status": "active",
+                "browser_fingerprint": fingerprint,
+                "final_token": final_token,
+                "activated_at": activated_at
+            }}
+        )
+
+        return jsonify({
+            "status": "success",
+            "final_token": final_token,
+            "message": "Device registered and token generated successfully."
+        }), 200
+
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+# =====================================================================
+# 4. ऐप (App): चेक की (Check Key) और मल्टी-डिवाइस सिक्योरिटी लॉजिक
+# =====================================================================
+@app.route('/api/premium/check-key/', methods=['POST', 'OPTIONS'])
+def check_premium_key():
+    if request.method == 'OPTIONS':
+        return '', 200
+        
+    try:
+        data = request.get_json()
+        final_token = data.get('final_token')
+        
+        app_device_id = data.get('app_device_id') or request.headers.get('X-App-Signature')
+        
+        if not final_token:
+            return jsonify({"status": "error", "message": "Final token is missing."}), 400
+            
+        if not app_device_id:
+            return jsonify({"status": "error", "message": "Device ID (app_device_id) is missing."}), 400
+
+        token_doc = premium_collection.find_one({"final_token": final_token})
+
+        if not token_doc:
+            return jsonify({"status": "error", "message": "Invalid token."}), 404
+
+        if token_doc.get("status") == "expired":
+            return jsonify({"status": "error", "message": "This premium token has expired."}), 403
+
+        # --- मल्टी-डिवाइस सुरक्षा लॉजिक (is_saved) ---
+        is_saved = token_doc.get("is_saved", "no")
+        saved_device_id = token_doc.get("app_device_id")
+
+        if is_saved == "no":
+            premium_collection.update_one(
+                {"_id": token_doc["_id"]},
+                {"$set": {
+                    "is_saved": "yes",
+                    "app_device_id": app_device_id
+                }}
+            )
+        else:
+            if saved_device_id != app_device_id:
+                return jsonify({
+                    "status": "error", 
+                    "message": "This token is already in use on another device."
+                }), 403
+
+        # --- एक्सपायरी (Validity) चेक करना ---
+        tz_kolkata = pytz.timezone('Asia/Kolkata')
+        current_time_kolkata = datetime.now(tz_kolkata)
+        
+        activated_time = datetime.fromisoformat(token_doc["activated_at"])
+        validity_days = token_doc.get("validity_days", 30) 
+        expiration_time = activated_time + timedelta(days=validity_days)
+        
+        if current_time_kolkata <= expiration_time:
+            days_left = (expiration_time - current_time_kolkata).days
+            return jsonify({
+                "status": "success", 
+                "message": "Premium access granted.",
+                "days_left": days_left
+            }), 200
+        else:
+            premium_collection.update_one({"_id": token_doc["_id"]}, {"$set": {"status": "expired"}})
+            return jsonify({"status": "error", "message": "Premium token has expired."}), 403
+            
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
 
 @app.route('/auth-Key/generate-token/', methods=['GET', 'POST', 'OPTIONS'])
 def handler():
