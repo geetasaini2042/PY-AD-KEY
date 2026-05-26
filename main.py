@@ -1,8 +1,8 @@
-from flask import Flask, request, jsonify, Response, redirect, make_response
+from flask import Flask, request, jsonify, Response, redirect, make_response, render_template_string
 from flask_cors import CORS
 import requests
 import secrets
-from datetime import datetime
+from datetime import datetime, timedelta
 import pytz
 from pymongo import MongoClient
 from urllib.parse import quote, urlparse
@@ -23,12 +23,7 @@ client = MongoClient(DT_MON)
 db = client['tokens_database']
 collection = db['kv_store']
 DB_KEY = "tokens_data"
-import os
-from flask import Flask, request, jsonify, render_template_string
-from datetime import datetime, timedelta
-import pytz
-import secrets
-from pymongo import MongoClient
+
 
 app = Flask(__name__)
 
@@ -46,6 +41,58 @@ DB_KEY = "tokens_data"
 # नए प्रीमियम सिस्टम के लिए उसी डेटाबेस में नया कलेक्शन
 premium_collection = db['premium_tokens']
 
+@app.route('/get-time', methods=['GET', 'OPTIONS'])
+def get_custom_time():
+    if request.method == 'OPTIONS':
+        return '', 200
+
+    try:
+        # हमेशा एशिया/कोलकाता (IST) का एकदम सही समय लेगा
+        tz_kolkata = pytz.timezone('Asia/Kolkata')
+        current_time_kolkata = datetime.now(tz_kolkata)
+        
+        # ISO 8601 फॉर्मेट में समय भेजना ताकि जावास्क्रिप्ट इसे आसानी से समझ सके
+        # उदाहरण: 2026-05-10T10:22:00.123456+05:30
+        formatted_time = current_time_kolkata.isoformat()
+        
+        return jsonify({
+            "status": "success",
+            "datetime": formatted_time
+        }), 200
+
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+#from flask import request, jsonify
+
+@app.route('/check-key-type', methods=['GET', 'OPTIONS'])
+def check_key_type():
+    if request.method == 'OPTIONS':
+        return '', 200
+
+    try:
+        # फ्रंटएंड से टोकन प्राप्त करना (?token=xyz)
+        token = request.args.get('token')
+
+        if token:
+            # चेक करें कि क्या यह टोकन प्रीमियम डेटाबेस में मौजूद है
+            premium_doc = premium_collection.find_one({"final_token": token})
+            
+            if premium_doc:
+                # अगर टोकन प्रीमियम डेटाबेस में मिल गया
+                return jsonify({
+                    "status": "success",
+                    "type": "premium"
+                }), 200
+
+        # अगर टोकन नहीं मिला या कुछ और भेजा गया है, तो डिफ़ॉल्ट URL Shortener मान लें
+        return jsonify({
+            "status": "success",
+            "type": "url_shortner"
+        }), 200
+
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 # =====================================================================
 # 1. एडमिन (Admin): प्रीमियम लिंक जनरेट करने का एंडपॉइंट
