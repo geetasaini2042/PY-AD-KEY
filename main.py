@@ -32,6 +32,87 @@ collection = db['kv_store']
 DB_KEY = "tokens_data"
 premium_collection = db['premium_tokens']
 
+
+# JSON डेटा लोड करने के लिए फंक्शन
+def load_apps_data():
+    try:
+        with open('apps_data.json', 'r') as file:
+            return json.load(file)
+    except FileNotFoundError:
+        return []
+
+# कस्टम हेडर चेक करने का अलग फंक्शन
+def should_block_request(app_signature, auth_token):
+    # यहाँ अपना लॉजिक लिखें
+    # उदाहरण के लिए: अगर हेडर मौजूद नहीं हैं, तो ब्लॉक करें
+    if not app_signature or not auth_token:
+        return True # True आने पर रिक्वेस्ट ब्लॉक हो जाएगी
+        
+    # अगर सब सही है तो False रिटर्न करें
+    return False
+
+@app.route('/APPX/<domain_id>/<path:x>', methods=['GET', 'POST', 'PUT', 'DELETE', 'PATCH'])
+def proxy_request(domain_id, x):
+    # 1. JSON डेटा पढ़ें
+    apps_data = load_apps_data()
+    
+    # 2. ID के आधार पर डोमेन का डेटा खोजें
+    app_config = next((item for item in apps_data if item.get("id") == domain_id), None)
+    
+    if not app_config:
+        return "Domain ID not found", 404
+
+    # 3. कस्टम हेडर्स प्राप्त करें
+    app_signature = request.headers.get('APP_SIGNATURE')
+    auth_token = request.headers.get('AUTH_TOKEN')
+    
+    # 4. कस्टम फंक्शन से हेडर्स चेक करें (अगर True आया तो तुरंत ब्लॉक)
+    if should_block_request(app_signature, auth_token):
+        return "Request Blocked: Invalid Credentials", 403
+        
+    # 5. आगे भेजने के लिए हेडर्स तैयार करें
+    # पुराने सभी हेडर्स लें, लेकिन 'host', 'app_signature', और 'auth_token' को हटा दें
+    forward_headers = {
+        key: value for key, value in request.headers.items() 
+        if key.lower() not in ['host', 'app_signature', 'auth_token']
+    }
+    
+    # JSON फ़ाइल से referer सेट करें
+    if 'referer' in app_config:
+        forward_headers['Referer'] = app_config['referer']
+        
+    # 6. नया URL तैयार करें
+    target_domain = app_config.get('domain')
+    target_url = f"https://{target_domain}/{x}"
+    
+    # अगर URL में कोई क्वेरी पैरामीटर (?key=value) है, तो उसे भी जोड़ें
+    if request.query_string:
+        target_url = f"{target_url}?{request.query_string.decode('utf-8')}"
+        
+    # 7. लक्ष्य डोमेन पर रिक्वेस्ट भेजें
+    try:
+        resp = requests.request(
+            method=request.method,
+            url=target_url,
+            headers=forward_headers,
+            data=request.get_data(),
+            cookies=request.cookies,
+            allow_redirects=False
+        )
+    except requests.exceptions.RequestException as e:
+        return f"Error connecting to target: {str(e)}", 502
+
+    # 8. रिस्पांस वापस क्लाइंट को भेजें
+    # कुछ हेडर्स को वापस भेजने से रोका जाता है ताकि कोई त्रुटि न आए
+    excluded_headers = ['content-encoding', 'content-length', 'transfer-encoding', 'connection']
+    headers = [
+        (name, value) for (name, value) in resp.raw.headers.items()
+        if name.lower() not in excluded_headers
+    ]
+    
+    return Response(resp.content, resp.status_code, headers)
+
+
 @app.route('/get-time', methods=['GET', 'OPTIONS'])
 def get_custom_time():
     if request.method == 'OPTIONS':
