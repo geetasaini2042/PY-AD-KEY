@@ -46,7 +46,7 @@ def should_block_request(app_signature, auth_token):
     # यहाँ अपना लॉजिक लिखें
     # उदाहरण के लिए: अगर हेडर मौजूद नहीं हैं, तो ब्लॉक करें
     if not app_signature or not auth_token:
-        return True # True आने पर रिक्वेस्ट ब्लॉक हो जाएगी
+        return False # True आने पर रिक्वेस्ट ब्लॉक हो जाएगी
         
     # अगर सब सही है तो False रिटर्न करें
     return False
@@ -61,8 +61,6 @@ def proxy_request(domain_id, x):
     
     if not app_config:
         return "Domain ID not found", 404
-
-    # 3. कस्टम हेडर्स प्राप्त करें
     app_signature = request.headers.get('APP_SIGNATURE')
     auth_token = request.headers.get('AUTH_TOKEN')
     
