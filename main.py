@@ -551,10 +551,6 @@ def verify_premium_fingerprint():
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
-
-# =====================================================================
-# 4. ऐप (App): चेक की (Check Key) और मल्टी-डिवाइस सिक्योरिटी लॉजिक
-# =====================================================================
 @app.route('/api/premium/check-key/', methods=['POST', 'OPTIONS'])
 def check_premium_key():
     if request.method == 'OPTIONS':
@@ -580,6 +576,14 @@ def check_premium_key():
         if token_doc.get("status") == "expired":
             return jsonify({"status": "error", "message": "This premium token has expired."}), 403
 
+        # 🌟 समाधान: समय की गणना (Time logic) को वेबहुक से पहले (ऊपर) लाया गया है 🌟
+        tz_kolkata = pytz.timezone('Asia/Kolkata')
+        current_time_kolkata = datetime.now(tz_kolkata)
+        
+        activated_time = datetime.fromisoformat(token_doc["activated_at"])
+        validity_days = token_doc.get("validity_days", 30) 
+        expiration_time = activated_time + timedelta(days=validity_days)
+
         # --- मल्टी-डिवाइस सुरक्षा लॉजिक (is_saved) ---
         is_saved = token_doc.get("is_saved", "no")
         saved_device_id = token_doc.get("app_device_id")
@@ -593,7 +597,7 @@ def check_premium_key():
                 }}
             )
             
-            # 🌟 नया जोड़ा गया: वेबहुक ट्रिगर
+            # अब यह एरर नहीं देगा क्योंकि activated_time और expiration_time ऊपर बन चुके हैं
             webhook_payload = {
                 "auth_token": final_token,
                 "app_signature": app_device_id,
@@ -611,13 +615,6 @@ def check_premium_key():
                 }), 403
 
         # --- एक्सपायरी (Validity) चेक करना ---
-        tz_kolkata = pytz.timezone('Asia/Kolkata')
-        current_time_kolkata = datetime.now(tz_kolkata)
-        
-        activated_time = datetime.fromisoformat(token_doc["activated_at"])
-        validity_days = token_doc.get("validity_days", 30) 
-        expiration_time = activated_time + timedelta(days=validity_days)
-        
         if current_time_kolkata <= expiration_time:
             days_left = (expiration_time - current_time_kolkata).days
             return jsonify({
@@ -631,8 +628,6 @@ def check_premium_key():
             
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
-
-
 @app.route('/auth-Key/generate-token/', methods=['GET', 'POST', 'OPTIONS'])
 def handler():
     # OPTIONS रिक्वेस्ट के लिए 200 स्टेटस लौटाएं
