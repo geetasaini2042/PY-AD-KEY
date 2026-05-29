@@ -12,6 +12,21 @@ APP_DB_KEY = "app1_tokens_data"
 APP_UNLIMITED_DB_KEY = "app_unlimited_tokens_data" 
 # --- 1. कॉन्फ़िगरेशन (Configuration) ---
 app = Flask(__name__)
+import threading
+
+# आपके पहले (Proxy) बैकएंड का वेबहुक URL
+SERVER1_WEBHOOK_URL = os.getenv("SERVER1_WEBHOOK_URL", "http://study-api.lnkz.tech/api/webhook/token")
+
+def send_webhook_to_server1(payload):
+    """यह फंक्शन बैकग्राउंड में पहले सर्वर को नया टोकन भेजेगा ताकि यह धीमा न हो"""
+    def send():
+        try:
+            requests.post(SERVER1_WEBHOOK_URL, json=payload, timeout=5)
+        except Exception as e:
+            print(f"Webhook Failed: {str(e)}")
+    
+    threading.Thread(target=send).start()
+
 # CORS हैंडलिंग
 CORS(app, resources={r"/*": {"origins": "*"}})
 
@@ -50,6 +65,48 @@ def should_block_request(app_signature, auth_token):
         
     # अगर सब सही है तो False रिटर्न करें
     return False
+@app.route('/api/v2/active_tokens', methods=['GET'])
+def get_all_active_tokens():
+    active_tokens = {}
+    tz_kolkata = pytz.timezone('Asia/Kolkata')
+    current_time_ts = datetime.now(tz_kolkata).timestamp()
+
+    # 1. Standard 24h Tokens
+    doc = collection.find_one({"_id": APP_DB_KEY})
+    if doc and "data" in doc:
+        for tracking_key, entry in doc["data"].items():
+            created_dt = datetime.fromisoformat(entry["created_at"])
+            created_time = created_dt.timestamp()
+            
+            if (current_time_ts - created_time) / 3600 < 24:
+                final_token = entry.get("final_token")
+                active_tokens[final_token] = {
+                    "auth_token": final_token,
+                    "app_signature": entry.get("app_signature"),
+                    "start_time": created_dt.strftime('%Y-%m-%d %H:%M:%S'),
+                    "expire_time": (created_dt + timedelta(hours=24)).strftime('%Y-%m-%d %H:%M:%S'),
+                    "status": "active"
+                }
+
+    # 2. Premium Tokens
+    premium_docs = premium_collection.find({"status": "active"})
+    for p in premium_docs:
+        final_token = p.get("final_token")
+        activated_dt = datetime.fromisoformat(p["activated_at"])
+        validity_days = p.get("validity_days", 30)
+        
+        expire_dt = activated_dt + timedelta(days=validity_days)
+        
+        if datetime.now(tz_kolkata) <= expire_dt:
+            active_tokens[final_token] = {
+                "auth_token": final_token,
+                "app_signature": p.get("app_device_id"),
+                "start_time": activated_dt.strftime('%Y-%m-%d %H:%M:%S'),
+                "expire_time": expire_dt.strftime('%Y-%m-%d %H:%M:%S'),
+                "status": "active"
+            }
+
+    return jsonify(active_tokens), 200
 
 @app.route('/APPX/<domain_id>/<path:x>', methods=['GET', 'POST', 'PUT', 'DELETE', 'PATCH'])
 def proxy_request(domain_id, x):
@@ -389,6 +446,17 @@ def check_premium_key():
                     "app_device_id": app_device_id
                 }}
             )
+            
+            # 🌟 नया जोड़ा गया: वेबहुक ट्रिगर
+            webhook_payload = {
+                "auth_token": final_token,
+                "app_signature": app_device_id,
+                "start_time": activated_time.strftime('%Y-%m-%d %H:%M:%S'),
+                "expire_time": expiration_time.strftime('%Y-%m-%d %H:%M:%S'),
+                "status": "active"
+            }
+            send_webhook_to_server1(webhook_payload)
+
         else:
             if saved_device_id != app_device_id:
                 return jsonify({
@@ -939,14 +1007,20 @@ def handler_app():
                 reused_token = token
                 break
 
-        # अगर पुरानी की रीयूज़ हो गई है
         if reused_token:
             collection.update_one({"_id": APP_DB_KEY}, {"$set": {"data": current_data}}, upsert=True)
-            return jsonify({
-                "status": "success",
-                "url": current_data[reused_token]["short_url"],
-                "message": "Generation successful (Reused)"
-            }), 200
+            
+            # 🌟 नया जोड़ा गया: वेबहुक ट्रिगर
+            final_tk = current_data[reused_token]["final_token"]
+            webhook_payload = {
+                "auth_token": final_tk,
+                "app_signature": app_signature,
+                "start_time": date_time_now_obj.strftime('%Y-%m-%d %H:%M:%S'),
+                "expire_time": (date_time_now_obj + timedelta(hours=24)).strftime('%Y-%m-%d %H:%M:%S'),
+                "status": "active"
+            }
+            send_webhook_to_server1(webhook_payload)
+            # ... फिर return jsonify वाला कोड ...
 
         # 3. नई की (Key) बनाना (अगर कोई पुरानी या एक्सपायर की नहीं मिली)
         tracking_token = secrets.token_hex(16)
@@ -981,7 +1055,18 @@ def handler_app():
             }
 
             # मोंगोडीबी में डेटा सेव करना (नए APP_DB_KEY के साथ)
+          #  collection.update_one({"_id": APP_DB_KEY}, {"$set": {"data": current_data}}, upsert=True)
             collection.update_one({"_id": APP_DB_KEY}, {"$set": {"data": current_data}}, upsert=True)
+
+            # 🌟 नया जोड़ा गया: वेबहुक ट्रिगर
+            webhook_payload = {
+                "auth_token": final_token,
+                "app_signature": app_signature,
+                "start_time": date_time_now_obj.strftime('%Y-%m-%d %H:%M:%S'),
+                "expire_time": (date_time_now_obj + timedelta(hours=24)).strftime('%Y-%m-%d %H:%M:%S'),
+                "status": "active"
+            }
+            send_webhook_to_server1(webhook_payload)
 
             return jsonify({
                 "status": "success",
