@@ -8,6 +8,13 @@ from pymongo import MongoClient
 from urllib.parse import quote, urlparse
 import os, json
 import random
+import logging
+
+
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+
 APP_DB_KEY = "app1_tokens_data"
 APP_UNLIMITED_DB_KEY = "app_unlimited_tokens_data" 
 # --- 1. कॉन्फ़िगरेशन (Configuration) ---
@@ -15,17 +22,30 @@ app = Flask(__name__)
 import threading
 
 # आपके पहले (Proxy) बैकएंड का वेबहुक URL
-SERVER1_WEBHOOK_URL = os.getenv("SERVER1_WEBHOOK_URL", "http://study-api.lnkz.tech/api/webhook/token")
-
+SERVER1_WEBHOOK_URL = "http://study-api.lnkz.tech/api/webhook/token"
 def send_webhook_to_server1(payload):
     """यह फंक्शन बैकग्राउंड में पहले सर्वर को नया टोकन भेजेगा ताकि यह धीमा न हो"""
-    def send():
-        try:
-            requests.post(SERVER1_WEBHOOK_URL, json=payload, timeout=5)
-        except Exception as e:
-            print(f"Webhook Failed: {str(e)}")
+    logger.info("Preparing to send webhook in background thread...")
     
+    def send():
+        logger.debug(f"Webhook thread started. Payload to send: {payload}")
+        try:
+            logger.info(f"Sending POST request to {SERVER1_WEBHOOK_URL}...")
+            response = requests.post(SERVER1_WEBHOOK_URL, json=payload, timeout=5)
+            
+            # रिस्पॉन्स का स्टेटस कोड चेक करना और लॉग करना
+            if response.status_code in [200, 201]:
+                logger.info(f"Webhook sent successfully! Status Code: {response.status_code}")
+            else:
+                logger.warning(f"Webhook sent but received unexpected status: {response.status_code}. Response: {response.text}")
+                
+        except Exception as e:
+            # print की जगह logger.error का इस्तेमाल
+            logger.error(f"Webhook Failed: {str(e)}")
+    
+    # थ्रेड को स्टार्ट करना
     threading.Thread(target=send).start()
+
 
 # CORS हैंडलिंग
 CORS(app, resources={r"/*": {"origins": "*"}})
@@ -109,9 +129,6 @@ def get_all_active_tokens():
     return jsonify(active_tokens), 200
 from bson import ObjectId
 
-# ==========================================================
-# 🌟 नया API: ब्राउज़र में JSON एडिटर (UI) के लिए
-# ==========================================================
 @app.route('/tokens/edits/ui', methods=['GET', 'POST'])
 def tokens_editor_ui():
     if request.method == 'GET':
@@ -1033,15 +1050,23 @@ def verify_handler_app():
     except Exception as e:
         return Response("Server Error: " + str(e), status=500, mimetype='text/plain')
 """
+
 @app.route('/auth-Key/generate-token/app/', methods=['GET', 'POST', 'OPTIONS'])
 def handler_app():
+    logger.info(f"Incoming {request.method} request to /auth-Key/generate-token/app/")
+    
     # OPTIONS रिक्वेस्ट के लिए 200 स्टेटस लौटाएं
     if request.method == 'OPTIONS':
+        logger.debug("Handling OPTIONS request, returning 200")
         return '', 200
+        
     try:
         # ऐप सिग्नेचर हेडर से लेना
         app_signature = request.headers.get('X-SN-Signature')
+        logger.debug(f"Received App Signature: {app_signature}")
+        
         if not app_signature:
+            logger.warning("App Signature is missing in headers")
             return jsonify({
                 "status": "error",
                 "message": "App Signature is missing"
@@ -1050,22 +1075,30 @@ def handler_app():
         user_ip = request.headers.get('X-Forwarded-For', request.remote_addr or 'unknown')
         if ',' in user_ip:
             user_ip = user_ip.split(',')[0].strip()
+        logger.debug(f"User IP identified as: {user_ip}")
             
         current_time = datetime.now().timestamp()
 
-        # मोंगोडीबी से ऐप का डेटा पढ़ना (अब यह अलग डेटाबेस नाम का उपयोग करेगा)
+        # मोंगोडीबी से ऐप का डेटा पढ़ना
+        logger.info(f"Fetching data from MongoDB for key: {APP_DB_KEY}")
         doc = collection.find_one({"_id": APP_DB_KEY})
         current_data = doc.get("data", {}) if doc else {}
+        logger.debug(f"Total tokens found in database: {len(current_data)}")
 
         tz_kolkata = pytz.timezone('Asia/Kolkata')
+        date_time_now_obj = datetime.now(tz_kolkata)
+        date_time_now = date_time_now_obj.isoformat()
         
         # 1. चेक करें कि क्या यूज़र (उसी ऐप सिग्नेचर) की कोई एक्टिव की (Key) है (24 घंटे से कम पुरानी)
+        logger.info("Checking for an existing active session (under 24 hours)...")
         for token, entry in current_data.items():
             if entry.get("app_signature") == app_signature:
                 created_time = datetime.fromisoformat(entry["created_at"]).timestamp()
                 hours_diff = (current_time - created_time) / 3600
+                logger.debug(f"Found token for signature {app_signature}. Age: {hours_diff:.2f} hours")
 
                 if hours_diff < 24:
+                    logger.info("Active session found. Returning existing short URL.")
                     return jsonify({
                         "status": "success",
                         "url": entry["short_url"],
@@ -1073,18 +1106,15 @@ def handler_app():
                     }), 200
 
         # 2. एक्सपायर हो चुकी की (Key) को रीयूज़ (Reuse) करना
+        logger.info("No active session found. Looking for an expired token to reuse...")
         reused_token = None
-        #date_time_now = datetime.now(tz_kolkata).isoformat()
-        # यहाँ सुधार करें (रीयूज़ और नई की दोनों जगह काम आएगा)
-        date_time_now_obj = datetime.now(tz_kolkata)
-        date_time_now = date_time_now_obj.isoformat()
-
 
         for token, entry in current_data.items():
             created_time = datetime.fromisoformat(entry["created_at"]).timestamp()
             hours_diff = (current_time - created_time) / 3600
 
             if hours_diff >= 24:
+                logger.debug(f"Expired token found for reuse: {token}. Age: {hours_diff:.2f} hours")
                 entry["ip"] = user_ip
                 entry["app_signature"] = app_signature # नया सिग्नेचर अपडेट करें
                 entry["created_at"] = date_time_now
@@ -1093,6 +1123,7 @@ def handler_app():
                 break
 
         if reused_token:
+            logger.info(f"Updating reused token {reused_token} in MongoDB...")
             collection.update_one({"_id": APP_DB_KEY}, {"$set": {"data": current_data}}, upsert=True)
             
             # 🌟 नया जोड़ा गया: वेबहुक ट्रिगर
@@ -1104,10 +1135,18 @@ def handler_app():
                 "expire_time": (date_time_now_obj + timedelta(hours=24)).strftime('%Y-%m-%d %H:%M:%S'),
                 "status": "active"
             }
+            logger.debug(f"Triggering webhook for reused token. Payload: {webhook_payload}")
             send_webhook_to_server1(webhook_payload)
-            # ... फिर return jsonify वाला कोड ...
+            
+            logger.info("Returning response for reused token.")
+            return jsonify({
+                "status": "success",
+                "url": current_data[reused_token]["short_url"],
+                "message": "Reused expired key"
+            }), 200
 
         # 3. नई की (Key) बनाना (अगर कोई पुरानी या एक्सपायर की नहीं मिली)
+        logger.info("No expired token found for reuse. Generating a brand new key...")
         tracking_token = secrets.token_hex(16)
         final_token = secrets.token_hex(16)
 
@@ -1119,18 +1158,23 @@ def handler_app():
             protocol = request.headers.get('X-Forwarded-Proto', 'http')
             main_website_url = f"{protocol}://{request.host}/auth?token={final_token}"
 
+        logger.debug(f"Main Website URL generated: {main_website_url}")
+
         tracking_api_url = f"https://study.edumate.life/app/?token={tracking_token}"
         api_url = f"https://arolinks.com/api?api={FA_KEY}&url={quote(tracking_api_url)}&format=json"
         
+        logger.info(f"Calling shortener API: {api_url}")
         api_response = requests.get(api_url, headers={'User-Agent': 'Mozilla/5.0'})
         json_response = api_response.json()
+        logger.debug(f"Shortener API Response: {json_response}")
 
         if json_response.get('status') == 'success':
             shortened_url = json_response.get('shortenedUrl')
+            logger.info(f"Successfully created short URL: {shortened_url}")
 
             current_data[tracking_token] = {
                 "ip": user_ip,
-                "app_signature": app_signature, # सिग्नेचर डेटाबेस में सेव करें
+                "app_signature": app_signature,
                 "created_at": date_time_now,
                 "short_url": shortened_url,
                 "tracking_url": tracking_api_url,
@@ -1139,8 +1183,8 @@ def handler_app():
                 "status": "active"
             }
 
-            # मोंगोडीबी में डेटा सेव करना (नए APP_DB_KEY के साथ)
-          #  collection.update_one({"_id": APP_DB_KEY}, {"$set": {"data": current_data}}, upsert=True)
+            # मोंगोडीबी में डेटा सेव करना
+            logger.info("Saving new token data to MongoDB...")
             collection.update_one({"_id": APP_DB_KEY}, {"$set": {"data": current_data}}, upsert=True)
 
             # 🌟 नया जोड़ा गया: वेबहुक ट्रिगर
@@ -1151,17 +1195,22 @@ def handler_app():
                 "expire_time": (date_time_now_obj + timedelta(hours=24)).strftime('%Y-%m-%d %H:%M:%S'),
                 "status": "active"
             }
+            logger.debug(f"Triggering webhook for new token. Payload: {webhook_payload}")
             send_webhook_to_server1(webhook_payload)
 
+            logger.info("Process complete. Returning new key response.")
             return jsonify({
                 "status": "success",
                 "url": shortened_url,
                 "message": "Generated new key"
             }), 200
         else:
-            raise Exception(json_response.get('message', 'Shortener API Failure'))
+            error_msg = json_response.get('message', 'Shortener API Failure')
+            logger.error(f"Shortener API failed: {error_msg}")
+            raise Exception(error_msg)
 
     except Exception as e:
+        logger.exception(f"An unexpected error occurred in handler_app: {str(e)}")
         return jsonify({
             "status": "error",
             "message": str(e)
