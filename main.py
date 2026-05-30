@@ -253,67 +253,7 @@ def tokens_editor_ui():
 
         except Exception as e:
             return jsonify({"status": "error", "message": str(e)}), 500
-
-@app.route('/APPX/<domain_id>/<path:x>', methods=['GET', 'POST', 'PUT', 'DELETE', 'PATCH'])
-def proxy_request(domain_id, x):
-    # 1. JSON डेटा पढ़ें
-    apps_data = load_apps_data()
-    
-    # 2. ID के आधार पर डोमेन का डेटा खोजें
-    app_config = next((item for item in apps_data if item.get("id") == domain_id), None)
-    
-    if not app_config:
-        return "Domain ID not found", 404
-    app_signature = request.headers.get('APP_SIGNATURE')
-    auth_token = request.headers.get('AUTH_TOKEN')
-    
-    # 4. कस्टम फंक्शन से हेडर्स चेक करें (अगर True आया तो तुरंत ब्लॉक)
-    if should_block_request(app_signature, auth_token):
-        return "Request Blocked: Invalid Credentials", 403
-        
-    # 5. आगे भेजने के लिए हेडर्स तैयार करें
-    # पुराने सभी हेडर्स लें, लेकिन 'host', 'app_signature', और 'auth_token' को हटा दें
-    forward_headers = {
-        key: value for key, value in request.headers.items() 
-        if key.lower() not in ['host', 'app_signature', 'auth_token']
-    }
-    
-    # JSON फ़ाइल से referer सेट करें
-    if 'referer' in app_config:
-        forward_headers['Referer'] = app_config['referer']
-        
-    # 6. नया URL तैयार करें
-    target_domain = app_config.get('domain')
-    target_url = f"https://{target_domain}/{x}"
-    
-    # अगर URL में कोई क्वेरी पैरामीटर (?key=value) है, तो उसे भी जोड़ें
-    if request.query_string:
-        target_url = f"{target_url}?{request.query_string.decode('utf-8')}"
-        
-    # 7. लक्ष्य डोमेन पर रिक्वेस्ट भेजें
-    try:
-        resp = requests.request(
-            method=request.method,
-            url=target_url,
-            headers=forward_headers,
-            data=request.get_data(),
-            cookies=request.cookies,
-            allow_redirects=False
-        )
-    except requests.exceptions.RequestException as e:
-        return f"Error connecting to target: {str(e)}", 502
-
-    # 8. रिस्पांस वापस क्लाइंट को भेजें
-    # कुछ हेडर्स को वापस भेजने से रोका जाता है ताकि कोई त्रुटि न आए
-    excluded_headers = ['content-encoding', 'content-length', 'transfer-encoding', 'connection']
-    headers = [
-        (name, value) for (name, value) in resp.raw.headers.items()
-        if name.lower() not in excluded_headers
-    ]
-    
-    return Response(resp.content, resp.status_code, headers)
-
-
+            
 @app.route('/get-time', methods=['GET', 'OPTIONS'])
 def get_custom_time():
     if request.method == 'OPTIONS':
@@ -560,7 +500,7 @@ def check_premium_key():
         data = request.get_json()
         final_token = data.get('final_token')
         
-        app_device_id = data.get('app_device_id') or request.headers.get('X-App-Signature')
+        app_device_id = data.get('app_device_id') or request.headers.get('X-SN-Signature')
         
         if not final_token:
             return jsonify({"status": "error", "message": "Final token is missing."}), 400
@@ -1100,7 +1040,7 @@ def handler_app():
         return '', 200
     try:
         # ऐप सिग्नेचर हेडर से लेना
-        app_signature = request.headers.get('X-App-Signature')
+        app_signature = request.headers.get('X-SN-Signature')
         if not app_signature:
             return jsonify({
                 "status": "error",
@@ -1230,7 +1170,7 @@ def verify_handler_app():
         return Response(status=200)
 
     # ऐप सिग्नेचर हेडर से लेना
-    app_signature = request.headers.get('X-App-Signature')
+    app_signature = request.headers.get('X-SN-Signature')
     if not app_signature:
         return Response("App Signature Missing", status=400, mimetype='text/plain')
 
