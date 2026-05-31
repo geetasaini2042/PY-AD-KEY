@@ -130,7 +130,7 @@ def get_all_active_tokens():
 
     return jsonify(active_tokens), 200
 
-@app.route('PW/schedule-details', methods=['GET'])
+@app.route('/PW/schedule-details', methods=['GET'])
 def proxy_schedule_details():
     # आने वाले URL से सभी पैरामीटर्स (query string) प्राप्त करें
     query_string = request.query_string.decode('utf-8')
