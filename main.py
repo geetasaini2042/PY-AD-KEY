@@ -9,6 +9,8 @@ from urllib.parse import quote, urlparse
 import os, json
 import random
 import logging
+from bson import ObjectId
+
 
 
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -127,7 +129,67 @@ def get_all_active_tokens():
             }
 
     return jsonify(active_tokens), 200
-from bson import ObjectId
+
+@app.route('PW/schedule-details', methods=['GET'])
+def proxy_schedule_details():
+    # आने वाले URL से सभी पैरामीटर्स (query string) प्राप्त करें
+    query_string = request.query_string.decode('utf-8')
+    
+    # टारगेट URL जहाँ रिक्वेस्ट भेजनी है
+    target_url = f"https://rarestudy.in/schedule-details?{query_string}"
+
+    # ब्राउज़र वाले सभी हेडर्स (cURL से लिए गए)
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+       # 'Accept-Encoding': 'gzip, deflate, br, zstd',
+        'Accept-Encoding': 'gzip, deflate',
+        'sec-ch-ua': '"Chromium";v="148", "Google Chrome";v="148", "Not/A)Brand";v="99"',
+        'sec-ch-ua-mobile': '?0',
+        'sec-ch-ua-platform': '"Linux"',
+        'upgrade-insecure-requests': '1',
+        'sec-fetch-site': 'same-origin',
+        'sec-fetch-mode': 'navigate',
+        'sec-fetch-user': '?1',
+        'sec-fetch-dest': 'document',
+        'referer': 'https://rarestudy.in/stream?batchId=691c37bcc8cc0783a9d602ee&subjectId=691e10b04a7ca45ed2d1dd13&chapterId=693822cf6de71259320d3374&batchName=Saakaar%202027%20Physics&subjectName=Physics&chapterName=EMT&section=videos',
+        'accept-language': 'en-IN,en-GB;q=0.9,en-US;q=0.8,en;q=0.7,hi;q=0.6',
+    }
+
+    # शुरुआती कुकीज़
+    cookies = {
+        'session_expiry': '1780282006682',
+        'favourite_batches': '%5B%226a0810667a12c6e8464434dd%22%2C%22691c37bcc8cc0783a9d602ee%22%5D',
+        'session': '.eJyt1Meuq2gCBOB3OVt6ZHK4Ui8wYHLmN2FjkcHkHFr97nPmHWZfq1J99c_PZ8znLu7zfv35s85b_tdPnKb5snzWocn7nz8_q_rmTZPj8px-xuNzyTw0gi72jhYzdM3LhmSWZCUvfyFRpQP5DfVxZKXPoLrW0FdNrfcoB-NmxCWPCS_nHdhC3AZ1sktWZ7uRfwjtCg3-6xrlfjDFcJdviQ7KlwjQ4Tkbhv1qeRxSzvZSFOUs5EAjOnQRKyHlAg2CHjjo5AnlnfC1ZovZIANBQCWTpIWrnZ2vFLkHo3xErEpdLaW0F0hGD9sb-N9wo3g7UMEmKBp-s9W9DLJFkf5cquo8p99r81bGfaYR4WOzCquXG8mzh9lbsIeb_iYTPUBTLi4IVrc77itz4fQ4qrs14zgJosrIcKFNS4FzM0Gp_bkzAuMbtoy8oDjd2A0gMTjyLUK6Zwp5DF1ZH7JcAF3wO2_EdVhllz2nYCVgNlyoYcZ8IvBgk4VXbeWkgO_QzGQd3LrEnSJSB-PU_1aVvGDJaHt4P17sXQiaj5n4KPNzZpHF-GVQprob0D-IZyfzS-IqCx3t_t50eqO0iXJzmsk2VDWlboNK4U3A1psaAje38ZOr58Qr7_1hM7tbPZ12KDi15_byPQ495WaTxcSXihSowDht7KvxCua1ZVq7UAlwhXYPSmsWbU0L2Ncu4p3uuonTZ6vnCyid44dqOZ7ftraZBCxX4mGhID6CVNv0BMvB-6F8KMAyEslnA82YGXYrr0DvgdFgkuK-p-DZ5eNebyyzinLmthGbMW0YJTrJKWisJiasUs1Nylu-Ju9jrDR-5R_usFB1sybRtdN9JbF___z1Mx6f_zMAjSLY5jB-Q2ijF3e35WLXv9MtBEJkKpyol6v0zOnelLb2YZQ1RSt0RH5DWEv13cagc4lbS53xpGZjv2oHYUVnokrAKjyaNQ1PNAuUt2sfUzGPZW3Iepjc1ozu1GUWtcS24kC-RloHtrlXJl1LcJRABZePq5VvWhzI5W0niG7ADjyu-Dmrqq5rwSKMc3-pI8zommL6-RvNPBUVzhDPxOXEeEHyWHOK3HioDgRLWXHSeP2MqjYGMi1Rh4qN2DoblQ2wp9l9R4UcNs3NSytR9Id2vb6dC3wQRO7tlOW5QxKFKZyhENIszgXSl6VbMRVmlTbKapXJvXN458zcpGXIaBk-eN6DxhVCb7lsBclQHetK-Dg0hQvsXbZxJpwKo1lt33P5QW00z1RXI1W05e6deUgvEkmoKZlfjFyecfts1pvOQ0Gfj4EFK7DxY7sjLSTWC_vivURpPiUIN5CmA35G9XaKvwd1mgH98G1YUk-Q66-ax3Ib88XTOCQQPrJXfZMZs2-QHl387vpOU1dRWzpxj5oOK50FLOPvntKI1MNqhC8hPzvHnGFVG9pJn7BIbK_TN05u1ZypV4RsMFanBrpJ1pJsS18rJ02zqKjfdplFLSKgFkGv9XfvqJPyOSG_eEVpQbl7vn2C6QSmHBp7DptiYbmy4EjiiRTkd2lEahJKikkTh2kUnUwNwdnc6H21p3A5oUGuov6LYl4-yy-Jevifh13fPcEScPGeXi6eDu42DCGAlZ14lwhWYJJ0-Sy5hNXwFF1tajuNZ4o6JcZRifzQLaoO_p3hJ8eseFpVbZxIzkCO9FKDbxT_x28KMAgTC9d58-HXl5jjpRXCa046gOJgh8_iLgIBT54IrfYBh8Lk9-Ox7vANbb3WaG3GEhUm68gHNIZWLBF-KLm7io_3UZfdObj159__AoKzV0c.ahuxUg.3yzDCVMd2G_RMG0etYeZt-MZZoo'
+    }
+
+    # Session ऑब्जेक्ट बनाएँ ताकि कुकीज़ और 302 रीडायरेक्ट ब्राउज़र की तरह हैंडल हो सकें
+    session = requests.Session()
+    session.cookies.update(cookies)
+
+    try:
+        # allow_redirects=True से यह 302 लोकेशन को फॉलो करेगा और नया HTML लाए
+        response = session.get(
+            target_url, 
+            headers=headers,
+        )
+        print(response.text)
+        response = session.get(
+            target_url, 
+            headers=headers, 
+            allow_redirects=True, 
+            timeout=15
+        )
+
+        # अंतिम रिस्पॉन्स क्लाइंट को वापस भेजें
+        return Response(
+            response.content, 
+            status=response.status_code, 
+            content_type=response.headers.get('content-type', 'text/html')
+        )
+
+    except requests.exceptions.RequestException as e:
+        return {"error": str(e)}, 500
 
 @app.route('/tokens/edits/ui', methods=['GET', 'POST'])
 def tokens_editor_ui():
