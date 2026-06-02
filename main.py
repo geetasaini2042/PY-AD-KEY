@@ -1022,6 +1022,76 @@ def handler_app():
             "status": "error",
             "message": str(e)
         }), 200
+
+
+@app.route('/auth-Key/check-key/app/', methods=['GET', 'OPTIONS'])
+def verify_handler_app():
+    # 1. CORS Headers और OPTIONS रिक्वेस्ट को हैंडल करना
+    if request.method == 'OPTIONS':
+        return Response(status=200)
+
+    # ऐप सिग्नेचर हेडर से लेना
+    app_signature = request.headers.get('X-SN-Signature')
+    if not app_signature:
+        return Response("App Signature Missing", status=400, mimetype='text/plain')
+
+    # URL से 'verify' पैरामीटर लेना (जैसे: ?verify=xyz)
+    key_to_check = request.args.get('verify')
+    if key_to_check:
+        key_to_check = key_to_check.strip()
+
+    if not key_to_check:
+        return Response("No key provided", status=400, mimetype='text/plain')
+
+    try:
+        # --- STEP 1: CHECK UNLIMITED TOKENS FIRST ---
+        u_doc = collection.find_one({"_id": APP_UNLIMITED_DB_KEY})
+        u_data = u_doc.get("data", {}) if u_doc else {}
+        
+        if key_to_check in u_data:
+            return Response("Authorized", status=200, mimetype='text/plain')
+
+        # --- STEP 2: CHECK STANDARD 24-HOUR TOKENS ---
+        doc = collection.find_one({"_id": APP_DB_KEY})
+        
+        if not doc or "data" not in doc:
+            return Response("No Database Found", status=404, mimetype='text/plain')
+
+        data = doc["data"]
+        found_entry = None
+        
+        # JSON डेटा में final_token को ढूँढें
+        for tracking_key, entry in data.items():
+            if entry.get("final_token") == key_to_check:
+                found_entry = entry
+                break 
+
+        # अगर final_token डेटाबेस में मिल गया
+        if found_entry is not None:
+            # --- SIGNATURE MATCH LOGIC ---
+            # चेक करें कि सेव किया गया सिग्नेचर भेजे गए सिग्नेचर से मैच करता है या नहीं
+            if found_entry.get("app_signature") != app_signature:
+                return Response("Signature Mismatch. Key cannot be shared.", status=403, mimetype='text/plain')
+
+            # --- TIME CALCULATION LOGIC ---
+            current_time = datetime.now().timestamp()
+            created_time = datetime.fromisoformat(found_entry["created_at"]).timestamp()
+            
+            time_diff_seconds = current_time - created_time
+            hours_diff = time_diff_seconds / 3600 
+
+            # Verify Condition (Less than 24 Hours)
+            if hours_diff < 24:
+                return Response("Authorized", status=200, mimetype='text/plain')
+            else:
+                return Response("Expired", status=401, mimetype='text/plain')
+        else:
+            return Response("Invalid Key", status=404, mimetype='text/plain')
+
+    except Exception as e:
+        return Response("Server Error: " + str(e), status=500, mimetype='text/plain')
+
+
 @app.route('/api/get_tokens', methods=['GET', 'OPTIONS'])
 def get_tokens_handler():
     # OPTIONS रिक्वेस्ट को हैंडल करना
