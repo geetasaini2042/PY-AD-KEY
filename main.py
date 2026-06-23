@@ -189,149 +189,6 @@ def proxy_schedule_details():
 
     except requests.exceptions.RequestException as e:
         return {"error": str(e)}, 500
-
-@app.route('/tokens/edits/ui', methods=['GET', 'POST'])
-def tokens_editor_ui():
-    if request.method == 'GET':
-        try:
-            # 1. स्टैण्डर्ड टोकन्स लाना
-            std_doc = collection.find_one({"_id": APP_DB_KEY})
-            std_data = std_doc.get("data", {}) if std_doc else {}
-            
-            # 2. प्रीमियम टोकन्स लाना
-            prem_cursor = premium_collection.find({})
-            prem_data = []
-            for p in prem_cursor:
-                # ObjectId को स्ट्रिंग में बदलना ज़रूरी है ताकि JSON में एरर न आए
-                p['_id'] = str(p['_id']) 
-                prem_data.append(p)
-                
-            # दोनों को एक साथ मिलाना
-            combined_data = {
-                "standard": std_data,
-                "premium": prem_data
-            }
-            
-            # JSON को सुंदर (indent=4) फॉर्मेट में बदलना
-            tokens_json = json.dumps(combined_data, indent=4)
-
-            # HTML और JavaScript UI
-            html_template = """
-            <!DOCTYPE html>
-            <html lang="en">
-            <head>
-                <meta charset="UTF-8">
-                <meta name="viewport" content="width=device-width, initial-scale=1.0">
-                <title>Token JSON Editor</title>
-                <style>
-                    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #1e1e1e; color: #d4d4d4; margin: 0; padding: 20px; }
-                    .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
-                    h2 { margin: 0; color: #61afef; }
-                    textarea { width: 100%; height: 75vh; background-color: #252526; color: #9cdcfe; font-family: 'Courier New', Courier, monospace; font-size: 14px; padding: 15px; border: 1px solid #333; border-radius: 8px; box-sizing: border-box; outline: none; resize: vertical; }
-                    textarea:focus { border-color: #007acc; }
-                    .btn-save { background-color: #007acc; color: white; border: none; padding: 10px 24px; font-size: 16px; font-weight: bold; border-radius: 5px; cursor: pointer; transition: 0.2s; }
-                    .btn-save:hover { background-color: #005f9e; }
-                    #status-msg { font-weight: bold; margin-top: 10px; }
-                </style>
-            </head>
-            <body>
-                <div class="header">
-                    <h2>Advanced Token Editor (JSON)</h2>
-                    <button class="btn-save" onclick="saveTokens()">💾 Save Changes</button>
-                </div>
-                <div id="status-msg"></div>
-                <textarea id="json-editor">{{ tokens_json }}</textarea>
-
-                <script>
-                    function showMessage(msg, isError) {
-                        const statusEl = document.getElementById('status-msg');
-                        statusEl.innerText = msg;
-                        statusEl.style.color = isError ? '#f44336' : '#4caf50';
-                        setTimeout(() => statusEl.innerText = '', 5000);
-                    }
-
-                    function saveTokens() {
-                        const jsonText = document.getElementById('json-editor').value;
-                        let parsedData;
-                        
-                        // 1. JSON में सिंटैक्स एरर चेक करना
-                        try {
-                            parsedData = JSON.parse(jsonText);
-                        } catch (e) {
-                            alert("❌ Invalid JSON Format! Please fix syntax errors.\\n\\nDetails: " + e.message);
-                            showMessage("Syntax Error in JSON!", true);
-                            return; // अगर एरर है तो रिक्वेस्ट आगे नहीं जाएगी
-                        }
-
-                        // 2. बैकएंड पर POST रिक्वेस्ट भेजना
-                        showMessage("Saving...", false);
-                        document.querySelector('.btn-save').disabled = true;
-
-                        fetch('/tokens/edits/ui', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify(parsedData)
-                        })
-                        .then(response => response.json())
-                        .then(data => {
-                            document.querySelector('.btn-save').disabled = false;
-                            if(data.status === 'success') {
-                                alert("✅ Tokens successfully updated!");
-                                showMessage("Saved Successfully!", false);
-                            } else {
-                                alert("❌ Error: " + data.message);
-                                showMessage("Error saving data.", true);
-                            }
-                        })
-                        .catch(err => {
-                            document.querySelector('.btn-save').disabled = false;
-                            alert("❌ Network Error!");
-                            showMessage("Network Error.", true);
-                        });
-                    }
-                </script>
-            </body>
-            </html>
-            """
-            return render_template_string(html_template, tokens_json=tokens_json)
-            
-        except Exception as e:
-            return f"Error loading data: {str(e)}", 500
-
-    # जब यूज़र "Save Changes" पर क्लिक करेगा (POST Request)
-    elif request.method == 'POST':
-        try:
-            updated_data = request.get_json()
-            if not updated_data:
-                return jsonify({"status": "error", "message": "No data received"}), 400
-
-            # 1. स्टैण्डर्ड टोकन्स को वापस डेटाबेस में सेव करना
-            if "standard" in updated_data:
-                collection.update_one(
-                    {"_id": APP_DB_KEY}, 
-                    {"$set": {"data": updated_data["standard"]}}, 
-                    upsert=True
-                )
-
-            # 2. प्रीमियम टोकन्स को अपडेट करना
-            if "premium" in updated_data:
-                for p_token in updated_data["premium"]:
-                    # _id को हटा दें क्योंकि हम final_token से सर्च करके अपडेट करेंगे
-                    p_token.pop('_id', None) 
-                    final_tk = p_token.get('final_token')
-                    
-                    if final_tk:
-                        premium_collection.update_one(
-                            {"final_token": final_tk},
-                            {"$set": p_token},
-                            upsert=True
-                        )
-
-            return jsonify({"status": "success", "message": "All tokens updated successfully!"})
-
-        except Exception as e:
-            return jsonify({"status": "error", "message": str(e)}), 500
-            
 @app.route('/get-time', methods=['GET', 'OPTIONS'])
 def get_custom_time():
     if request.method == 'OPTIONS':
@@ -382,6 +239,123 @@ def check_key_type():
 
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
+@app.route('/tokens/edit-premium', methods=['GET', 'POST'])
+def premium_tokens_editor_ui():
+    if request.method == 'GET':
+        try:
+            prem_cursor = premium_collection.find({})
+            prem_data = []
+            for p in prem_cursor:
+                p['_id'] = str(p['_id']) 
+                prem_data.append(p)
+                
+            tokens_json = json.dumps(prem_data, indent=4)
+
+            html_template = """
+            <!DOCTYPE html>
+            <html lang="en">
+            <head>
+                <meta charset="UTF-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <title>Premium Token Editor</title>
+                <style>
+                    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #1e1e1e; color: #d4d4d4; margin: 0; padding: 20px; }
+                    .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+                    h2 { margin: 0; color: #c678dd; } 
+                    textarea { width: 100%; height: 75vh; background-color: #252526; color: #9cdcfe; font-family: 'Courier New', Courier, monospace; font-size: 14px; padding: 15px; border: 1px solid #333; border-radius: 8px; box-sizing: border-box; outline: none; resize: vertical; }
+                    textarea:focus { border-color: #c678dd; }
+                    .btn-save { background-color: #c678dd; color: white; border: none; padding: 10px 24px; font-size: 16px; font-weight: bold; border-radius: 5px; cursor: pointer; transition: 0.2s; }
+                    .btn-save:hover { background-color: #a05eb5; }
+                    #status-msg { font-weight: bold; margin-top: 10px; }
+                </style>
+            </head>
+            <body>
+                <div class="header">
+                    <h2>Premium Token Editor (JSON)</h2>
+                    <button class="btn-save" onclick="saveTokens()">💾 Save Premium Changes</button>
+                </div>
+                <div id="status-msg"></div>
+                <textarea id="json-editor">{{ tokens_json }}</textarea>
+
+                <script>
+                    function showMessage(msg, isError) {
+                        const statusEl = document.getElementById('status-msg');
+                        statusEl.innerText = msg;
+                        statusEl.style.color = isError ? '#f44336' : '#4caf50';
+                        setTimeout(() => statusEl.innerText = '', 5000);
+                    }
+
+                    function saveTokens() {
+                        const jsonText = document.getElementById('json-editor').value;
+                        let parsedData;
+                        
+                        try {
+                            parsedData = JSON.parse(jsonText);
+                        } catch (e) {
+                            alert("❌ Invalid JSON Format!\\n\\nDetails: " + e.message);
+                            showMessage("Syntax Error in JSON!", true);
+                            return;
+                        }
+
+                        showMessage("Saving...", false);
+                        document.querySelector('.btn-save').disabled = true;
+
+                        fetch('/tokens/edit-premium', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(parsedData)
+                        })
+                        .then(response => response.json())
+                        .then(data => {
+                            document.querySelector('.btn-save').disabled = false;
+                            if(data.status === 'success') {
+                                alert("✅ Premium Tokens successfully updated!");
+                                showMessage("Saved Successfully!", false);
+                            } else {
+                                alert("❌ Error: " + data.message);
+                                showMessage("Error saving data.", true);
+                            }
+                        })
+                        .catch(err => {
+                            document.querySelector('.btn-save').disabled = false;
+                            alert("❌ Network Error!");
+                            showMessage("Network Error.", true);
+                        });
+                    }
+                </script>
+            </body>
+            </html>
+            """
+            # कैशिंग रोकने के लिए Response ऑब्जेक्ट
+            response = make_response(render_template_string(html_template, tokens_json=tokens_json))
+            response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+            response.headers["Pragma"] = "no-cache"
+            response.headers["Expires"] = "0"
+            return response
+            
+        except Exception as e:
+            return f"Error loading premium data: {str(e)}", 500
+
+    elif request.method == 'POST':
+        try:
+            updated_data = request.get_json()
+            if not isinstance(updated_data, list):
+                return jsonify({"status": "error", "message": "Data format should be a JSON array (list)"}), 400
+
+            # 1. डेटाबेस से पुराने सभी टोकन्स डिलीट करें ताकि कचरा न बचे
+            premium_collection.delete_many({})
+
+            # 2. अगर नया डेटा खाली नहीं है, तो उसे इन्सर्ट करें
+            if len(updated_data) > 0:
+                for p_token in updated_data:
+                    p_token.pop('_id', None) # MongoDB अपनी नई _id खुद बना लेगा
+                
+                premium_collection.insert_many(updated_data)
+
+            return jsonify({"status": "success", "message": "Premium tokens updated completely!"})
+
+        except Exception as e:
+            return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route('/admin/generate-premium-link/', methods=['POST'])
 def generate_premium_link():
