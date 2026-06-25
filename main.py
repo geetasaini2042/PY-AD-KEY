@@ -16,7 +16,7 @@ logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %
 logger = logging.getLogger(__name__)
 
 
-APP_DB_KEY = "app1_tokens_data"
+APP_DB_KEY = "apps_data_token"
 APP_UNLIMITED_DB_KEY = "app_unlimited_tokens_data" 
 # --- 1. कॉन्फ़िगरेशन (Configuration) ---
 app = Flask(__name__)
@@ -620,6 +620,7 @@ def check_premium_key():
             
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
+        
 @app.route('/auth-Key/generate-token/', methods=['GET', 'POST', 'OPTIONS'])
 def handler():
     # OPTIONS रिक्वेस्ट के लिए 200 स्टेटस लौटाएं
@@ -788,216 +789,6 @@ def verify_handler():
         return Response("Server Error: " + str(e), status=500, mimetype='text/plain')
 
 
-@app.route('/auth-Key/generate-token/app/', methods=['GET', 'POST', 'OPTIONS'])
-def handler_app():
-    logger.info(f"Incoming {request.method} request to /auth-Key/generate-token/app/")
-    
-    # OPTIONS रिक्वेस्ट के लिए 200 स्टेटस लौटाएं
-    if request.method == 'OPTIONS':
-        logger.debug("Handling OPTIONS request, returning 200")
-        return '', 200
-        
-    try:
-        # ऐप सिग्नेचर हेडर से लेना
-        app_signature = request.headers.get('X-SN-Signature')
-        logger.debug(f"Received App Signature: {app_signature}")
-        
-        if not app_signature:
-            logger.warning("App Signature is missing in headers")
-            return jsonify({
-                "status": "error",
-                "message": "App Signature is missing"
-            }), 400
-
-        user_ip = request.headers.get('X-Forwarded-For', request.remote_addr or 'unknown')
-        if ',' in user_ip:
-            user_ip = user_ip.split(',')[0].strip()
-        logger.debug(f"User IP identified as: {user_ip}")
-            
-        current_time = datetime.now().timestamp()
-
-        # मोंगोडीबी से ऐप का डेटा पढ़ना
-        logger.info(f"Fetching data from MongoDB for key: {APP_DB_KEY}")
-        doc = collection.find_one({"_id": APP_DB_KEY})
-        current_data = doc.get("data", {}) if doc else {}
-        logger.debug(f"Total tokens found in database: {len(current_data)}")
-
-        tz_kolkata = pytz.timezone('Asia/Kolkata')
-        date_time_now_obj = datetime.now(tz_kolkata)
-        date_time_now = date_time_now_obj.isoformat()
-        
-        # 1. चेक करें कि क्या यूज़र (उसी ऐप सिग्नेचर) की कोई एक्टिव की (Key) है (24 घंटे से कम पुरानी)
-        logger.info("Checking for an existing active session (under 24 hours)...")
-        for token, entry in current_data.items():
-            if entry.get("app_signature") == app_signature:
-                created_time = datetime.fromisoformat(entry["created_at"]).timestamp()
-                hours_diff = (current_time - created_time) / 3600
-                logger.debug(f"Found token for signature {app_signature}. Age: {hours_diff:.2f} hours")
-
-                if hours_diff < 24:
-                    logger.info("Active session found. Returning existing short URL.")
-                    return jsonify({
-                        "status": "success",
-                        "url": entry["short_url"],
-                        "message": "Active session found"
-                    }), 200
-
-        # 2. एक्सपायर हो चुकी की (Key) को रीयूज़ (Reuse) करना
-        logger.info("No active session found. Looking for an expired token to reuse...")
-        reused_token = None
-
-        for token, entry in current_data.items():
-            created_time = datetime.fromisoformat(entry["created_at"]).timestamp()
-            hours_diff = (current_time - created_time) / 3600
-
-            if hours_diff >= 24:
-                logger.debug(f"Expired token found for reuse: {token}. Age: {hours_diff:.2f} hours")
-                reused_token = token
-                break
-
-        if reused_token:
-            logger.info(f"Updating reused token {reused_token} in MongoDB...")
-            
-            # ट्रैकिंग टोकन वही रहेगा (ताकि Arolinks काम करता रहे)
-            # लेकिन हम नया 'final_token' बनाएंगे ताकि यूज़र पुरानी की इस्तेमाल न कर सके
-            new_final_token = secrets.token_hex(16)
-            entry = current_data[reused_token]
-            
-            entry["ip"] = user_ip
-            entry["app_signature"] = app_signature
-            entry["created_at"] = date_time_now
-            entry["status"] = "active"
-            entry["final_token"] = new_final_token
-            
-            # बायपास सिस्टम के लिए फ्लैग को रीसेट करें (ताकि उसे फिर से स्टेप 1 पूरा करना पड़े)
-            if "is_tracked_url1" in entry:
-                entry["is_tracked_url1"] = False
-
-            # 🌟 चेक करें कि क्या यह पुराने सिस्टम का डेटा है (नया वर्ज़न नहीं है)
-            if "shortx_url" not in entry:
-                logger.info("Reused token is from legacy system. Upgrading to dual tracking...")
-                tracking_api_url_2 = f"https://study.edumate.life/app/?api=2&token={reused_token}"
-                shortx_api_key = "63b82b926367794c651bd6f1c95acff389ea122d"
-                shortx_req_url = f"https://shortxlinks.com/api?api={shortx_api_key}&url={quote(tracking_api_url_2)}&format=json"
-                
-                try:
-                    shortx_response = requests.get(shortx_req_url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=7)
-                    shortx_json = shortx_response.json()
-                    
-                    if shortx_json.get('status') == 'success' or 'shortenedUrl' in shortx_json:
-                        entry["shortx_url"] = shortx_json.get('shortenedUrl')
-                        entry["tracking_url_2"] = tracking_api_url_2
-                        entry["tracking_url_1"] = f"https://study.edumate.life/app/?api=1&token={reused_token}"
-                        logger.info("Successfully upgraded legacy token.")
-                    else:
-                        error_msg = shortx_json.get('message', 'Shortxlinks API Failure')
-                        raise Exception(f"Shortxlinks Error during upgrade: {error_msg}")
-                except Exception as e:
-                    logger.error(f"Failed to upgrade legacy token: {str(e)}")
-                    raise e
-
-            # डेटाबेस में अपडेट करें
-            collection.update_one({"_id": APP_DB_KEY}, {"$set": {"data": current_data}}, upsert=True)
-            
-            # वेबहुक ट्रिगर (नए फाइनल टोकन के साथ)
-            webhook_payload = {
-                "auth_token": new_final_token,
-                "app_signature": app_signature,
-                "start_time": date_time_now_obj.strftime('%Y-%m-%d %H:%M:%S'),
-                "expire_time": (date_time_now_obj + timedelta(hours=24)).strftime('%Y-%m-%d %H:%M:%S'),
-                "status": "active"
-            }
-            logger.debug(f"Triggering webhook for reused token. Payload: {webhook_payload}")
-            send_webhook_to_server1(webhook_payload)
-            
-            logger.info("Returning response for reused token.")
-            return jsonify({
-                "status": "success",
-                "url": entry["short_url"], # यह पुराना Arolinks URL ही रहेगा
-                "message": "Reused and upgraded expired key"
-            }), 200
-
-        # 3. नई की (Key) बनाना (डबल ट्रैकिंग सिस्टम के साथ)
-        logger.info("No expired token found for reuse. Generating a brand new key...")
-        tracking_token = secrets.token_hex(16)
-        final_token = secrets.token_hex(16)
-
-        # --- स्टेप 1: Shortxlinks के लिए api=2 वाला ट्रैकिंग URL बनाना और शॉर्ट करना ---
-        tracking_api_url_2 = f"https://study.edumate.life/app/?api=2&token={tracking_token}"
-        shortx_api_key = "63b82b926367794c651bd6f1c95acff389ea122d"
-        shortx_req_url = f"https://shortxlinks.com/api?api={shortx_api_key}&url={quote(tracking_api_url_2)}&format=json"
-        
-        logger.info(f"Calling Shortxlinks API with api=2 tracking URL: {shortx_req_url}")
-        shortx_response = requests.get(shortx_req_url, headers={'User-Agent': 'Mozilla/5.0'})
-        shortx_json = shortx_response.json()
-        
-        if shortx_json.get('status') == 'success' or 'shortenedUrl' in shortx_json:
-            shortx_url = shortx_json.get('shortenedUrl')
-            logger.info(f"Successfully created Shortxlinks URL: {shortx_url}")
-        else:
-            error_msg = shortx_json.get('message', 'Shortxlinks API Failure')
-            logger.error(f"Shortxlinks API failed: {error_msg}")
-            raise Exception(f"Shortxlinks Error: {error_msg}")
-
-        # --- स्टेप 2: Arolinks के लिए api=1 वाला ट्रैकिंग URL बनाना और शॉर्ट करना ---
-        tracking_api_url_1 = f"https://study.edumate.life/app/?api=1&token={tracking_token}"
-        aro_req_url = f"https://arolinks.com/api?api={FA_KEY}&url={quote(tracking_api_url_1)}&format=json"
-        
-        logger.info(f"Calling Arolinks API with api=1 tracking URL: {aro_req_url}")
-        aro_response = requests.get(aro_req_url, headers={'User-Agent': 'Mozilla/5.0'})
-        aro_json = aro_response.json()
-
-        if aro_json.get('status') == 'success':
-            aro_shortened_url = aro_json.get('shortenedUrl')
-            logger.info(f"Successfully created Arolinks URL: {aro_shortened_url}")
-
-            # डेटाबेस में सेव करना
-            current_data[tracking_token] = {
-                "ip": user_ip,
-                "app_signature": app_signature,
-                "created_at": date_time_now,
-                "short_url": aro_shortened_url,             
-                "tracking_url_1": tracking_api_url_1,       
-                "tracking_url_2": tracking_api_url_2,       
-                "shortx_url": shortx_url,                   
-                "final_token": final_token,
-                "is_tracked_url1": False,                   # नया फ्लैग बायपास चेक के लिए
-                "status": "active"
-            }
-
-            logger.info("Saving new token data to MongoDB...")
-            collection.update_one({"_id": APP_DB_KEY}, {"$set": {"data": current_data}}, upsert=True)
-
-            # वेबहुक ट्रिगर
-            webhook_payload = {
-                "auth_token": final_token,
-                "app_signature": app_signature,
-                "start_time": date_time_now_obj.strftime('%Y-%m-%d %H:%M:%S'),
-                "expire_time": (date_time_now_obj + timedelta(hours=24)).strftime('%Y-%m-%d %H:%M:%S'),
-                "status": "active"
-            }
-            logger.debug(f"Triggering webhook for new token. Payload: {webhook_payload}")
-            send_webhook_to_server1(webhook_payload)
-
-            logger.info("Process complete. Returning new key response.")
-            return jsonify({
-                "status": "success",
-                "url": aro_shortened_url, 
-                "message": "Generated new key with dual tracking check"
-            }), 200
-        else:
-            error_msg = aro_json.get('message', 'Arolinks API Failure')
-            logger.error(f"Arolinks API failed: {error_msg}")
-            raise Exception(f"Arolinks Error: {error_msg}")
-
-    except Exception as e:
-        logger.exception(f"An unexpected error occurred in handler_app: {str(e)}")
-        return jsonify({
-            "status": "error",
-            "message": str(e)
-        }), 200
-
-
 @app.route('/auth-Key/check-key/app/', methods=['GET', 'OPTIONS'])
 def verify_handler_app():
     # 1. CORS Headers और OPTIONS रिक्वेस्ट को हैंडल करना
@@ -1120,6 +911,172 @@ ALLOWED_REFERERS = ["shortxlinks.com", "arolinks.com"]
 FALLBACK_SHORTENER_API_URL = "https://arolinks.com/api"
 FALLBACK_SHORTENER_API_KEY = FA_KEY
 
+@app.route('/auth-Key/generate-token/app/', methods=['GET', 'POST', 'OPTIONS'])
+def handler_app():
+    logger.info(f"Incoming {request.method} request to /auth-Key/generate-token/app/")
+    
+    # OPTIONS रिक्वेस्ट के लिए 200 स्टेटस लौटाएं
+    if request.method == 'OPTIONS':
+        logger.debug("Handling OPTIONS request, returning 200")
+        return '', 200
+        
+    try:
+        # ऐप सिग्नेचर हेडर से लेना
+        app_signature = request.headers.get('X-SN-Signature')
+        logger.debug(f"Received App Signature: {app_signature}")
+        
+        if not app_signature:
+            logger.warning("App Signature is missing in headers")
+            return jsonify({
+                "status": "error",
+                "message": "App Signature is missing"
+            }), 400
+
+        user_ip = request.headers.get('X-Forwarded-For', request.remote_addr or 'unknown')
+        if ',' in user_ip:
+            user_ip = user_ip.split(',')[0].strip()
+        logger.debug(f"User IP identified as: {user_ip}")
+            
+        current_time = datetime.now().timestamp()
+
+        # मोंगोडीबी से ऐप का डेटा पढ़ना
+        logger.info(f"Fetching data from MongoDB for key: {APP_DB_KEY}")
+        doc = collection.find_one({"_id": APP_DB_KEY})
+        current_data = doc.get("data", {}) if doc else {}
+        logger.debug(f"Total tokens found in database: {len(current_data)}")
+
+        tz_kolkata = pytz.timezone('Asia/Kolkata')
+        date_time_now_obj = datetime.now(tz_kolkata)
+        date_time_now = date_time_now_obj.isoformat()
+        
+        # 1. चेक करें कि क्या यूज़र (उसी ऐप सिग्नेचर) की कोई एक्टिव की (Key) है (24 घंटे से कम पुरानी)
+        logger.info("Checking for an existing active session (under 24 hours)...")
+        for token, entry in current_data.items():
+            if entry.get("app_signature") == app_signature:
+                created_time = datetime.fromisoformat(entry["created_at"]).timestamp()
+                hours_diff = (current_time - created_time) / 3600
+                logger.debug(f"Found token for signature {app_signature}. Age: {hours_diff:.2f} hours")
+
+                if hours_diff < 24:
+                    logger.info("Active session found. Returning existing short URL.")
+                    return jsonify({
+                        "status": "success",
+                        "url": entry["short_url"],
+                        "message": "Active session found"
+                    }), 200
+
+        # 2. एक्सपायर हो चुकी की (Key) को रीयूज़ (Reuse) करना
+        logger.info("No active session found. Looking for an expired token to reuse...")
+        reused_token = None
+
+        for token, entry in current_data.items():
+            created_time = datetime.fromisoformat(entry["created_at"]).timestamp()
+            hours_diff = (current_time - created_time) / 3600
+
+            if hours_diff >= 24:
+                logger.debug(f"Expired token found for reuse: {token}. Age: {hours_diff:.2f} hours")
+                reused_token = token
+                break
+
+        if reused_token:
+            logger.info(f"Updating reused token {reused_token} in MongoDB...")
+            
+            # ट्रैकिंग टोकन वही रहेगा (ताकि Arolinks काम करता रहे)
+            new_final_token = secrets.token_hex(16)
+            entry = current_data[reused_token]
+            
+            entry["ip"] = user_ip
+            entry["app_signature"] = app_signature
+            entry["created_at"] = date_time_now
+            entry["status"] = "active"
+            entry["final_token"] = new_final_token
+            
+            # बायपास सिस्टम के लिए फ्लैग को रीसेट करें (ताकि उसे फिर से स्टेप 1 पूरा करना पड़े)
+            if "is_tracked_url1" in entry:
+                entry["is_tracked_url1"] = False
+
+            # डेटाबेस में अपडेट करें
+            collection.update_one({"_id": APP_DB_KEY}, {"$set": {"data": current_data}}, upsert=True)
+            
+            # वेबहुक ट्रिगर (नए फाइनल टोकन के साथ)
+            webhook_payload = {
+                "auth_token": new_final_token,
+                "app_signature": app_signature,
+                "start_time": date_time_now_obj.strftime('%Y-%m-%d %H:%M:%S'),
+                "expire_time": (date_time_now_obj + timedelta(hours=24)).strftime('%Y-%m-%d %H:%M:%S'),
+                "status": "active"
+            }
+            logger.debug(f"Triggering webhook for reused token. Payload: {webhook_payload}")
+            send_webhook_to_server1(webhook_payload)
+            
+            logger.info("Returning response for reused token.")
+            return jsonify({
+                "status": "success",
+                "url": entry["short_url"], # यह पुराना Arolinks URL ही रहेगा
+                "message": "Reused expired key"
+            }), 200
+
+        # 3. नई की (Key) बनाना (सिंगल ट्रैकिंग सिस्टम के साथ - केवल Arolinks)
+        logger.info("No expired token found for reuse. Generating a brand new key...")
+        tracking_token = secrets.token_hex(16)
+        final_token = secrets.token_hex(16)
+
+        # --- Arolinks के लिए api=1 वाला ट्रैकिंग URL बनाना और शॉर्ट करना ---
+        tracking_api_url_1 = f"https://study.edumate.life/app/?api=1&token={tracking_token}"
+        aro_req_url = f"https://arolinks.com/api?api={FA_KEY}&url={quote(tracking_api_url_1)}&format=json"
+        
+        logger.info(f"Calling Arolinks API with api=1 tracking URL: {aro_req_url}")
+        aro_response = requests.get(aro_req_url, headers={'User-Agent': 'Mozilla/5.0'})
+        aro_json = aro_response.json()
+
+        if aro_json.get('status') == 'success':
+            aro_shortened_url = aro_json.get('shortenedUrl')
+            logger.info(f"Successfully created Arolinks URL: {aro_shortened_url}")
+
+            # डेटाबेस में सेव करना
+            current_data[tracking_token] = {
+                "ip": user_ip,
+                "app_signature": app_signature,
+                "created_at": date_time_now,
+                "short_url": aro_shortened_url,             
+                "tracking_url_1": tracking_api_url_1,       
+                "final_token": final_token,
+                "is_tracked_url1": False,                   # बायपास चेक के लिए फ्लैग
+                "status": "active"
+            }
+
+            logger.info("Saving new token data to MongoDB...")
+            collection.update_one({"_id": APP_DB_KEY}, {"$set": {"data": current_data}}, upsert=True)
+
+            # वेबहुक ट्रिगर
+            webhook_payload = {
+                "auth_token": final_token,
+                "app_signature": app_signature,
+                "start_time": date_time_now_obj.strftime('%Y-%m-%d %H:%M:%S'),
+                "expire_time": (date_time_now_obj + timedelta(hours=24)).strftime('%Y-%m-%d %H:%M:%S'),
+                "status": "active"
+            }
+            logger.debug(f"Triggering webhook for new token. Payload: {webhook_payload}")
+            send_webhook_to_server1(webhook_payload)
+
+            logger.info("Process complete. Returning new key response.")
+            return jsonify({
+                "status": "success",
+                "url": aro_shortened_url, 
+                "message": "Generated new key with single tracking check"
+            }), 200
+        else:
+            error_msg = aro_json.get('message', 'Arolinks API Failure')
+            logger.error(f"Arolinks API failed: {error_msg}")
+            raise Exception(f"Arolinks Error: {error_msg}")
+
+    except Exception as e:
+        logger.exception(f"An unexpected error occurred in handler_app: {str(e)}")
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 200
+
 @app.route('/app/', methods=['GET', 'OPTIONS', 'POST', 'PUT', 'DELETE'])
 def app_token_handler12():
     # --- 0. फालतू रिक्वेस्ट ब्लॉक करें (OPTIONS, HEAD आदि) ---
@@ -1137,34 +1094,9 @@ def app_token_handler12():
 
     try:
         token = request.args.get('token')
-        api_param = request.args.get('api', '1') # अगर api न हो तो डिफ़ॉल्ट 1 मानें
 
         if not token:
             return get_html_error_page("Invalid Request", "Token is missing from the URL. Please check your link.", "❓", 400)
-
-        # --- आईपी निकालने का लॉजिक (IPv4 को प्राथमिकता) ---
-        cf_ip = request.headers.get("CF-Connecting-IP", "")
-        xff_ips = request.headers.get("X-Forwarded-For", "")
-        
-        all_ips = []
-        if cf_ip: 
-            all_ips.append(cf_ip.strip())
-        for ip in xff_ips.split(","):
-            if ip.strip(): 
-                all_ips.append(ip.strip())
-
-        final_ip = "Unknown IP"
-        ipv4 = next((ip for ip in all_ips if "." in ip), None)
-        ipv6 = next((ip for ip in all_ips if ":" in ip), None)
-
-        if ipv4:
-            final_ip = ipv4
-        elif ipv6:
-            final_ip = ipv6
-
-        # क्लाउडफ्लेयर हेडर से यूज़र का देश (Country) निकालना
-        user_country = request.headers.get("CF-IPCountry", "XX")
-        referer = request.headers.get("Referer", "")
 
         # आज की तारीख निकालें (IST Timezone)
         tz_kolkata = pytz.timezone('Asia/Kolkata')
@@ -1174,124 +1106,27 @@ def app_token_handler12():
         cookie_header = request.headers.get("Cookie", "")
         has_today_cookie = f"visited_date={today_date}" in cookie_header
 
-        # --- स्टेप 1: इंडिया ट्रैफिक चेक ---
-        if user_country != "IN" and final_ip != "Unknown IP":
-            return get_html_error_page(
-                "Access Restricted", 
-                "It looks like you are using a VPN or Proxy. Please disable it and try again.", 
-                "🌍🚫", 
-                403
-            )
-
-        # --- स्टेप 2: रिफ़रर चेक (अगर जरूरत हो तो अनकमेंट करें) ---
-        is_valid_referer = False
-        if referer:
-            for allowed in ALLOWED_REFERERS:
-                if allowed in referer:
-                    is_valid_referer = True
-                    break
-      #  if not is_valid_referer:
-          #  return get_html_error_page("Access Denied", "A bypass detected. Please use the original link.", "🛡️", 403)
-
-        # --- स्टेप 3: DB से वेरिफिकेशन ---
+        # --- DB से वेरिफिकेशन ---
         DB_KEY = APP_DB_KEY
         doc = collection.find_one({"_id": DB_KEY})
         db_data = doc.get("data", {}) if doc else {}
         token_data = db_data.get(token)
 
-        # आईपी मैच चेक
-        ip_matches = False
-        if token_data and token_data.get("ip"):
-            ip_matches = token_data["ip"] in all_ips
+        # 1. वैलिडिटी चेक: क्या टोकन मौजूद है?
+        if not token_data:
+            return get_html_error_page("Verification Failed", "Token is invalid. Please generate a new link.", "❌", 403)
 
-        # अगर टोकन नहीं मिला या आईपी मैच नहीं हुआ
-        if not token_data or not ip_matches:
-            return get_html_error_page("Verification Failed", "Token is invalid, expired, or IP address mismatch. Please generate a new link.", "❌", 403)
-
-        # ==========================================
-        # 🌟 नया लॉजिक: पुराने डेटा को ऑन-द-फ्लाई अपडेट करना
-        # ==========================================
-        
-        # अगर डेटाबेस में shortx_url नहीं है, तो उसे अभी जनरेट करें (Legacy Support)
-        if "shortx_url" not in token_data:
-            tracking_api_url_2 = f"https://study.edumate.life/app/?api=2&token={token}"
-            shortx_api_key = "63b82b926367794c651bd6f1c95acff389ea122d"
-            shortx_req_url = f"https://shortxlinks.com/api?api={shortx_api_key}&url={quote(tracking_api_url_2)}&format=json"
+        # 2. एक्सपायरेशन चेक: क्या टोकन 24 घंटे से पुराना है?
+        created_time_str = token_data.get("created_at")
+        if created_time_str:
+            created_time = datetime.fromisoformat(created_time_str).timestamp()
+            current_time = datetime.now().timestamp()
+            hours_diff = (current_time - created_time) / 3600
             
-            try:
-                shortx_response = requests.get(shortx_req_url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=7)
-                shortx_json = shortx_response.json()
-                
-                if shortx_json.get('status') == 'success' or 'shortenedUrl' in shortx_json:
-                    token_data["shortx_url"] = shortx_json.get('shortenedUrl')
-                    token_data["tracking_url_2"] = tracking_api_url_2
-                    
-                    # डेटाबेस में नया फॉर्मेट सेव करें
-                    db_data[token] = token_data
-                    collection.update_one({"_id": DB_KEY}, {"$set": {"data": db_data}})
-                else:
-                    return get_html_error_page("API Error", "Failed to process legacy token via shortener.", "⚙️", 500)
-            except Exception as e:
-                return get_html_error_page("System Error", f"Error updating old token: {str(e)}", "⚙️", 500)
+            if hours_diff >= 24:
+                return get_html_error_page("Token Expired", "Your access key has expired. Please generate a new one.", "⏳", 403)
 
-        # ==========================================
-        # 🌟 डुअल ट्रैकिंग और बायपास प्रिवेंशन 
-        # ==========================================
-        
-        if api_param == '1':
-            # यूज़र Arolinks (Step 1) से आया है।
-            db_data[token]["is_tracked_url1"] = True
-            collection.update_one({"_id": DB_KEY}, {"$set": {"data": db_data}})
-            
-            next_shortener_url = token_data.get("shortx_url")
-            if not next_shortener_url:
-                return get_html_error_page("Routing Error", "Next URL not found.", "⚙️", 500)
-                
-            # यूज़र को तुरंत दूसरे शॉर्टनर (Shortxlinks) पर भेजें
-            return redirect(next_shortener_url)
-
-        elif api_param == '2':
-            # यूज़र Shortxlinks (Step 2) से आया है।
-            # चेक करें कि क्या इसने Step 1 पूरा किया था?
-            if not token_data.get("is_tracked_url1"):
-                original_start_url = token_data.get("short_url", "#")
-                
-                # बायपास पकड़े जाने पर एरर पेज दिखाएं और वापस पहले शॉर्टनर पर भेजें
-                bypass_html = f"""
-                <!DOCTYPE html>
-                <html lang="en">
-                <head>
-                    <meta charset="UTF-8">
-                    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-                    <meta http-equiv="refresh" content="4;url={original_start_url}">
-                    <title>Bypass Detected</title>
-                    <style>
-                        @import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600&display=swap');
-                        body, html {{ margin: 0; padding: 0; width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; background: #0f172a; font-family: 'Montserrat', sans-serif; }}
-                        .glass-container {{ background: rgba(255, 50, 50, 0.1); backdrop-filter: blur(15px); border: 1px solid rgba(255, 50, 50, 0.3); border-radius: 24px; padding: 40px 50px; text-align: center; color: white; width: 90%; max-width: 400px; box-shadow: 0 10px 30px rgba(255,50,50,0.2); box-sizing: border-box; }}
-                        h2 {{ color: #ef4444; margin-bottom: 10px; font-size: 22px; }}
-                        p {{ color: #fca5a5; font-size: 14px; line-height: 1.5; }}
-                        .loader {{ border: 3px solid rgba(255,255,255,0.1); border-top: 3px solid #ef4444; border-radius: 50%; width: 24px; height: 24px; animation: spin 1s linear infinite; margin: 20px auto 0; }}
-                        @keyframes spin {{ 0% {{ transform: rotate(0deg); }} 100% {{ transform: rotate(360deg); }} }}
-                    </style>
-                </head>
-                <body>
-                    <div class="glass-container">
-                        <h2>Bypass Detected 🚨</h2>
-                        <p>You skipped a mandatory step. You are being redirected to the original starting link in 3 seconds...</p>
-                        <div class="loader"></div>
-                    </div>
-                </body>
-                </html>
-                """
-                return make_response(bypass_html, 403)
-                
-            # अगर Step 1 पूरा किया है, तो आगे बढ़ें और फाइनल टोकन दिखाएं
-            pass 
-        else:
-            return get_html_error_page("Invalid API", "Unknown API tracking parameter.", "❓", 400)
-
-        # --- स्टेप 4: स्क्रीन पर फाइनल टोकन दिखाने वाला HTML तैयार करें ---
+        # --- स्क्रीन पर फाइनल टोकन दिखाने वाला HTML तैयार करें ---
         final_token = token_data.get("final_token", "Error: Token Not Found")
         
         html_content = f"""
@@ -1301,24 +1136,32 @@ def app_token_handler12():
             <meta charset="UTF-8">
             <meta name="viewport" content="width=device-width, initial-scale=1.0">
             <title>Your Access Token</title>
+            
+            <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-6225893138851886" crossorigin="anonymous"></script>
+            
             <style>
                 @import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600&display=swap');
                 body, html {{
-                    margin: 0; padding: 0; width: 100%; height: 100%; display: flex;
-                    align-items: center; justify-content: center; background: #0f172a;
-                    font-family: 'Montserrat', sans-serif; overflow: hidden;
+                    margin: 0; padding: 0; width: 100%; min-height: 100vh; display: flex;
+                    flex-direction: column; align-items: center; background: #0f172a;
+                    font-family: 'Montserrat', sans-serif; overflow-x: hidden; overflow-y: auto;
                 }}
-                .blob {{ position: absolute; border-radius: 50%; filter: blur(60px); z-index: 0; animation: float 8s infinite ease-in-out alternate; }}
+                .blob {{ position: fixed; border-radius: 50%; filter: blur(60px); z-index: 0; animation: float 8s infinite ease-in-out alternate; }}
                 .blob-1 {{ width: 300px; height: 300px; background: #3b82f6; top: -100px; left: -100px; }}
                 .blob-2 {{ width: 250px; height: 250px; background: #8b5cf6; bottom: -50px; right: -50px; animation-delay: -4s; }}
                 
+                #main-wrapper {{
+                    display: flex; flex-direction: column; align-items: center; width: 100%; z-index: 1; padding: 20px 0;
+                }}
+
                 .glass-container {{
-                    position: relative; z-index: 1; background: rgba(255, 255, 255, 0.05);
+                    background: rgba(255, 255, 255, 0.05);
                     backdrop-filter: blur(15px); -webkit-backdrop-filter: blur(15px);
                     border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 24px;
                     padding: 40px 50px; text-align: center; box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
-                    width: 100%; max-width: 350px; box-sizing: border-box;
+                    width: 90%; max-width: 400px; box-sizing: border-box; margin: 20px 0;
                 }}
+                
                 .welcome-text {{ color: #ffffff; font-size: 24px; font-weight: 600; letter-spacing: 2px; text-transform: uppercase; margin-bottom: 8px; }}
                 .sub-text {{ color: #10b981; font-size: 14px; letter-spacing: 1px; margin-bottom: 25px; }}
                 
@@ -1337,28 +1180,75 @@ def app_token_handler12():
                 }}
                 .btn:hover {{ opacity: 0.9; transform: translateY(-2px); }}
                 
+                /* Adblocker Overlay */
+                #adblock-overlay {{
+                    position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+                    background: rgba(15, 23, 42, 0.95); z-index: 9999; display: none;
+                    flex-direction: column; align-items: center; justify-content: center;
+                    color: white; text-align: center; padding: 20px; box-sizing: border-box;
+                }}
+                #adblock-overlay h2 {{ color: #ef4444; font-size: 28px; margin-bottom: 10px; }}
+                #adblock-overlay p {{ font-size: 16px; color: #cbd5e1; max-width: 400px; line-height: 1.5; }}
+                
                 @keyframes float {{
                     0% {{ transform: translate(0, 0) scale(1); }}
                     100% {{ transform: translate(30px, 50px) scale(1.1); }}
                 }}
+                
+                .ad-container {{ width: 100%; max-width: 800px; padding: 10px; box-sizing: border-box; text-align: center; }}
             </style>
         </head>
         <body>
             <div class="blob blob-1"></div>
             <div class="blob blob-2"></div>
-            <div class="glass-container">
-                <div class="welcome-text">Success ✅</div>
-                <div class="sub-text">Verification Complete.</div>
+            
+            <div id="adblock-overlay">
+                <h2>Ad-Blocker Detected! 🛑</h2>
+                <p>We rely on ads to keep this service running. Please disable your ad-blocker and refresh the page to see your token.</p>
+                <button class="btn" style="max-width: 200px; margin-top: 20px;" onclick="location.reload()">I have disabled it</button>
+            </div>
+
+            <div id="main-wrapper">
                 
-                <input type="text" id="token-input" class="key-input" value="{final_token}" readonly>
-                <button id="copy-btn" class="btn" onclick="copyToken()">Copy Key</button>
+                <div class="ad-container">
+                    <ins class="adsbygoogle"
+                         style="display:block"
+                         data-ad-client="ca-pub-6225893138851886"
+                         data-ad-slot="4878017615"
+                         data-ad-format="auto"
+                         data-full-width-responsive="true"></ins>
+                    <script>
+                         (adsbygoogle = window.adsbygoogle || []).push({{}});
+                    </script>
+                </div>
+
+                <div class="glass-container">
+                    <div class="welcome-text">Success ✅</div>
+                    <div class="sub-text">Verification Complete.</div>
+                    
+                    <input type="text" id="token-input" class="key-input" value="{final_token}" readonly>
+                    <button id="copy-btn" class="btn" onclick="copyToken()">Copy Key</button>
+                </div>
+                
+                <div class="ad-container">
+                    <ins class="adsbygoogle"
+                         style="display:block"
+                         data-ad-format="autorelaxed"
+                         data-ad-client="ca-pub-6225893138851886"
+                         data-ad-slot="8857212532"></ins>
+                    <script>
+                         (adsbygoogle = window.adsbygoogle || []).push({{}});
+                    </script>
+                </div>
+
             </div>
 
             <script>
+                // Copy Token Function
                 function copyToken() {{
                     var copyText = document.getElementById("token-input");
                     copyText.select();
-                    copyText.setSelectionRange(0, 99999); /* मोबाइल के लिए */
+                    copyText.setSelectionRange(0, 99999); 
                     navigator.clipboard.writeText(copyText.value).then(() => {{
                         var btn = document.getElementById("copy-btn");
                         btn.innerText = "Copied! ✅";
@@ -1369,6 +1259,32 @@ def app_token_handler12():
                         }}, 2500);
                     }});
                 }}
+
+                // Adblocker Detection Logic
+                setTimeout(function() {{
+                    // Create a fake ad banner
+                    var adTest = document.createElement('div');
+                    adTest.innerHTML = '&nbsp;';
+                    adTest.className = 'adsbox';
+                    adTest.style.position = 'absolute';
+                    adTest.style.top = '-1000px';
+                    document.body.appendChild(adTest);
+                    
+                    setTimeout(function() {{
+                        // Check if the fake ad banner or window.adsbygoogle is blocked
+                        var isBlocked = false;
+                        if (adTest.offsetHeight === 0) {{
+                            isBlocked = true;
+                        }}
+                        
+                        adTest.remove(); // cleanup
+                        
+                        if (isBlocked) {{
+                            document.getElementById('adblock-overlay').style.display = 'flex';
+                            document.getElementById('main-wrapper').style.display = 'none';
+                        }}
+                    }}, 300);
+                }}, 1500);
             </script>
         </body>
         </html>
@@ -1489,9 +1405,6 @@ def redirect_handler():
         return get_html_error_page("Server Error", "Something went wrong. Please try again later.", "⚙️", 500)
 
 
-# =====================================================================
-# HELPER FUNCTIONS 
-# =====================================================================
 
 def get_html_error_page(title, message, icon="⚠️", status_code=400):
     """
