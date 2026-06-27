@@ -11,7 +11,6 @@ import random
 import logging
 from bson import ObjectId
 
-
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
@@ -67,7 +66,10 @@ db = client['tokens_database']
 collection = db['kv_store']
 DB_KEY = "tokens_data"
 premium_collection = db['premium_tokens']
-
+TELEGRAM_BOT_TOKEN = "8292521812:AAFukmxihMZId4elnEA6Ne_KKYw4NrMXwuc"
+TELEGRAM_CHAT_ID = "6150091802"
+primeuserdb = client["prime_study_db"]
+users_collection = primeuserdb["users_data"]
 
 # JSON डेटा लोड करने के लिए फंक्शन
 def load_apps_data():
@@ -86,6 +88,59 @@ def should_block_request(app_signature, auth_token):
         
     # अगर सब सही है तो False रिटर्न करें
     return False
+
+
+def send_to_telegram(data):
+    """डेटा को टेलीग्राम बॉट के ज़रिए भेजने का फंक्शन"""
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    
+    # JSON डेटा को अच्छे से फॉर्मेट करके स्ट्रिंग बनाना
+    formatted_data = json.dumps(data, indent=2, ensure_ascii=False)
+    message = f"🚨 <b>New User Data Received</b> 🚨\n\n<pre>{formatted_data}</pre>"
+    
+    payload = {
+        "chat_id": TELEGRAM_CHAT_ID,
+        "text": message[:4000], # Telegram की मेसेज लिमिट को ध्यान में रखते हुए
+        "parse_mode": "HTML"
+    }
+    
+    try:
+        requests.post(url, json=payload)
+    except Exception as e:
+        print("Telegram Error:", e)
+
+@app.route('/user-details/prime_study_Official', methods=['POST'])
+def save_user_details():
+    try:
+        data = request.json
+        if not data:
+            return jsonify({"error": "डेटा नहीं मिला"}), 400
+
+        # 1. डेटा आते ही उसे सबसे पहले Telegram पर भेज दें (चाहे डुप्लीकेट हो या नहीं)
+        send_to_telegram(data)
+
+        # 2. MongoDB के लिए डुप्लीकेट चेक करना (deviceId के आधार पर)
+        device_id = None
+        if "deviceInfo" in data and "deviceId" in data["deviceInfo"]:
+            device_id = data["deviceInfo"]["deviceId"]
+
+        if device_id:
+            # चेक करें कि क्या यह deviceId पहले से डेटाबेस में है
+            existing_user = users_collection.find_one({"deviceInfo.deviceId": device_id})
+            if existing_user:
+                return jsonify({
+                    "message": "(Duplicate)"
+                }), 200
+
+        # 3. अगर डेटा नया है (डुप्लीकेट नहीं है), तो उसे MongoDB में सेव करें
+        data["created_at"] = datetime.utcnow()
+        users_collection.insert_one(data)
+
+        return jsonify({"message": "Success"}), 201
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 @app.route('/api/v2/active_tokens', methods=['GET'])
 def get_all_active_tokens():
     active_tokens = {}
