@@ -817,7 +817,7 @@ def handler():
             "message": str(e)
         }), 200
 
-@app.route('/auth-Key/check-key/', methods=['GET', 'OPTIONS'])
+@app.route('/auth-Key/check-keyh/', methods=['GET', 'OPTIONS'])
 def verify_handler():
     # 1. CORS Headers और OPTIONS रिक्वेस्ट को हैंडल करना
     if request.method == 'OPTIONS':
@@ -880,9 +880,6 @@ def verify_handler():
         # किसी भी तरह की सर्वर एरर के लिए
         return Response("Server Error: " + str(e), status=500, mimetype='text/plain')
 
-import pytz
-from datetime import datetime
-from flask import request, Response
 
 @app.route('/auth-Key/check-key/app/', methods=['GET', 'OPTIONS'])
 def verify_handler_app():
@@ -904,6 +901,21 @@ def verify_handler_app():
         return Response("No key provided", status=400, mimetype='text/plain')
 
     try:
+        # --- 8 जुलाई 2026 तक के लिए डायरेक्ट बाईपास (Direct Bypass) लॉजिक ---
+        tz_kolkata = pytz.timezone('Asia/Kolkata')
+        date_time_now_obj = datetime.now(tz_kolkata)
+        
+        # फिक्स एक्सपायरी डेट (8 जुलाई 2026 रात 11:59 तक)
+        FIXED_EXPIRY_DATE = tz_kolkata.localize(datetime(2026, 7, 8, 23, 59, 59))
+
+        # अगर वर्तमान समय 8 जुलाई 2026 से पहले का है, तो बिना सिग्नेचर या डेटाबेस चेक किए सीधे Authorized कर दें
+        if date_time_now_obj <= FIXED_EXPIRY_DATE:
+            return Response("Authorized", status=200, mimetype='text/plain')
+
+        # --------------------------------------------------------------------------------
+        # 9 जुलाई से नीचे दिया गया पुराना लॉजिक (Database + Signature Check) काम करेगा
+        # --------------------------------------------------------------------------------
+
         # --- STEP 1: CHECK UNLIMITED TOKENS FIRST ---
         u_doc = collection.find_one({"_id": APP_UNLIMITED_DB_KEY})
         u_data = u_doc.get("data", {}) if u_doc else {}
@@ -911,7 +923,7 @@ def verify_handler_app():
         if key_to_check in u_data:
             return Response("Authorized", status=200, mimetype='text/plain')
 
-        # --- STEP 2: CHECK STANDARD 24-HOUR TOKENS / FIXED CAMPAIGN ---
+        # --- STEP 2: CHECK STANDARD 24-HOUR TOKENS ---
         doc = collection.find_one({"_id": APP_DB_KEY})
         
         if not doc or "data" not in doc:
@@ -929,21 +941,11 @@ def verify_handler_app():
         # अगर final_token डेटाबेस में मिल गया
         if found_entry is not None:
             # --- SIGNATURE MATCH LOGIC ---
+            # चेक करें कि सेव किया गया सिग्नेचर भेजे गए सिग्नेचर से मैच करता है या नहीं
             if found_entry.get("app_signature") != app_signature:
                 return Response("Signature Mismatch. Key cannot be shared.", status=403, mimetype='text/plain')
 
             # --- TIME CALCULATION LOGIC ---
-            tz_kolkata = pytz.timezone('Asia/Kolkata')
-            date_time_now_obj = datetime.now(tz_kolkata)
-            
-            # फिक्स एक्सपायरी डेट (8 जुलाई 2026 रात 11:59 तक)
-            FIXED_EXPIRY_DATE = tz_kolkata.localize(datetime(2026, 7, 8, 23, 59, 59))
-
-            # अगर वर्तमान समय 8 जुलाई 2026 से पहले का है, तो हर की (Key) को Authorized कर दें
-            if date_time_now_obj <= FIXED_EXPIRY_DATE:
-                return Response("Authorized", status=200, mimetype='text/plain')
-
-            # 8 जुलाई के बाद, पुराना 24-घंटे वाला लॉजिक लागू होगा
             current_time = datetime.now().timestamp()
             created_time = datetime.fromisoformat(found_entry["created_at"]).timestamp()
             
