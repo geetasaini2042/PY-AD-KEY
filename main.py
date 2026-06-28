@@ -11,6 +11,8 @@ import random
 import logging
 from bson import ObjectId
 
+
+
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
@@ -878,6 +880,9 @@ def verify_handler():
         # किसी भी तरह की सर्वर एरर के लिए
         return Response("Server Error: " + str(e), status=500, mimetype='text/plain')
 
+import pytz
+from datetime import datetime
+from flask import request, Response
 
 @app.route('/auth-Key/check-key/app/', methods=['GET', 'OPTIONS'])
 def verify_handler_app():
@@ -906,7 +911,7 @@ def verify_handler_app():
         if key_to_check in u_data:
             return Response("Authorized", status=200, mimetype='text/plain')
 
-        # --- STEP 2: CHECK STANDARD 24-HOUR TOKENS ---
+        # --- STEP 2: CHECK STANDARD 24-HOUR TOKENS / FIXED CAMPAIGN ---
         doc = collection.find_one({"_id": APP_DB_KEY})
         
         if not doc or "data" not in doc:
@@ -924,11 +929,21 @@ def verify_handler_app():
         # अगर final_token डेटाबेस में मिल गया
         if found_entry is not None:
             # --- SIGNATURE MATCH LOGIC ---
-            # चेक करें कि सेव किया गया सिग्नेचर भेजे गए सिग्नेचर से मैच करता है या नहीं
             if found_entry.get("app_signature") != app_signature:
                 return Response("Signature Mismatch. Key cannot be shared.", status=403, mimetype='text/plain')
 
             # --- TIME CALCULATION LOGIC ---
+            tz_kolkata = pytz.timezone('Asia/Kolkata')
+            date_time_now_obj = datetime.now(tz_kolkata)
+            
+            # फिक्स एक्सपायरी डेट (8 जुलाई 2026 रात 11:59 तक)
+            FIXED_EXPIRY_DATE = tz_kolkata.localize(datetime(2026, 7, 8, 23, 59, 59))
+
+            # अगर वर्तमान समय 8 जुलाई 2026 से पहले का है, तो हर की (Key) को Authorized कर दें
+            if date_time_now_obj <= FIXED_EXPIRY_DATE:
+                return Response("Authorized", status=200, mimetype='text/plain')
+
+            # 8 जुलाई के बाद, पुराना 24-घंटे वाला लॉजिक लागू होगा
             current_time = datetime.now().timestamp()
             created_time = datetime.fromisoformat(found_entry["created_at"]).timestamp()
             
@@ -945,7 +960,6 @@ def verify_handler_app():
 
     except Exception as e:
         return Response("Server Error: " + str(e), status=500, mimetype='text/plain')
-
 
 @app.route('/api/get_tokens', methods=['GET', 'OPTIONS'])
 def get_tokens_handler():
@@ -1000,7 +1014,7 @@ def get_app_tokens_handler():
 ALLOWED_REFERERS = ["shortxlinks.com", "arolinks.com"]
 FALLBACK_SHORTENER_API_URL = "https://arolinks.com/api"
 FALLBACK_SHORTENER_API_KEY = FA_KEY
-
+"""
 @app.route('/auth-Key/generate-token/app/', methods=['GET', 'POST', 'OPTIONS'])
 def handler_app():
     logger.info(f"Incoming {request.method} request to /auth-Key/generate-token/app/")
@@ -1166,6 +1180,192 @@ def handler_app():
             "status": "error",
             "message": str(e)
         }), 200
+"""
+
+
+# अपना Arolinks API Key यहाँ सेट करना सुनिश्चित करें (यदि अलग फाइल में है तो इसे हटा दें)
+# FA_KEY = "your_arolinks_api_key" 
+
+@app.route('/auth-Key/generate-token/app/', methods=['GET', 'POST', 'OPTIONS'])
+def handler_app():
+    logger.info(f"Incoming {request.method} request to /auth-Key/generate-token/app/")
+    
+    if request.method == 'OPTIONS':
+        return '', 200
+        
+    try:
+        app_signature = request.headers.get('X-SN-Signature')
+        if not app_signature:
+            return jsonify({"status": "error", "message": "App Signature is missing"}), 400
+
+        user_ip = request.headers.get('X-Forwarded-For', request.remote_addr or 'unknown')
+        if ',' in user_ip:
+            user_ip = user_ip.split(',')[0].strip()
+            
+        current_time = datetime.now().timestamp()
+        
+        logger.info(f"Fetching data from MongoDB for key: {APP_DB_KEY}")
+        doc = collection.find_one({"_id": APP_DB_KEY})
+        current_data = doc.get("data", {}) if doc else {}
+
+        tz_kolkata = pytz.timezone('Asia/Kolkata')
+        date_time_now_obj = datetime.now(tz_kolkata)
+        date_time_now = date_time_now_obj.isoformat()
+        
+        # 10 दिन का फिक्स टाइम (28 जून 2026 से 8 जुलाई 2026 रात 11:59 तक)
+        FIXED_START_DATE = tz_kolkata.localize(datetime(2026, 6, 28, 0, 0, 0))
+        FIXED_EXPIRY_DATE = tz_kolkata.localize(datetime(2026, 7, 8, 23, 59, 59))
+        
+        # ---------------------------------------------------------
+        # 1. नया सिस्टम (केवल 8 जुलाई 2026 तक चलेगा)
+        # ---------------------------------------------------------
+        if date_time_now_obj <= FIXED_EXPIRY_DATE:
+            logger.info("Running 10-days fixed campaign logic (Valid till 8 July 2026)")
+            
+            # एक्टिव की (Key) चेक करना
+            for token, entry in current_data.items():
+                if entry.get("app_signature") == app_signature:
+                    created_time = datetime.fromisoformat(entry["created_at"]).timestamp()
+                    if created_time >= FIXED_START_DATE.timestamp() and current_time < FIXED_EXPIRY_DATE.timestamp():
+                        return jsonify({
+                            "status": "success",
+                            "url": entry.get("final_token", token), 
+                            "message": "Active 10-days session found"
+                        }), 200
+
+            # पुरानी की (Key) रीयूज़ करना
+            reused_token = None
+            for token, entry in current_data.items():
+                created_time = datetime.fromisoformat(entry["created_at"]).timestamp()
+                if created_time < FIXED_START_DATE.timestamp():
+                    reused_token = token
+                    break
+
+            if reused_token:
+                new_final_token = secrets.token_hex(16)
+                entry = current_data[reused_token]
+                entry.update({
+                    "ip": user_ip, "app_signature": app_signature, 
+                    "created_at": date_time_now, "status": "active", 
+                    "final_token": new_final_token
+                })
+                if "is_tracked_url1" in entry: entry["is_tracked_url1"] = False
+                
+                collection.update_one({"_id": APP_DB_KEY}, {"$set": {"data": current_data}}, upsert=True)
+                
+                webhook_payload = {
+                    "auth_token": new_final_token, "app_signature": app_signature,
+                    "start_time": date_time_now_obj.strftime('%Y-%m-%d %H:%M:%S'),
+                    "expire_time": FIXED_EXPIRY_DATE.strftime('%Y-%m-%d %H:%M:%S'),
+                    "status": "active"
+                }
+                send_webhook_to_server1(webhook_payload)
+                
+                return jsonify({"status": "success", "url": new_final_token, "message": "Reused key for 10-days"}), 200
+
+            # नई की (Key) बनाना
+            tracking_token = secrets.token_hex(16) 
+            final_token = secrets.token_hex(16)
+            current_data[tracking_token] = {
+                "ip": user_ip, "app_signature": app_signature, "created_at": date_time_now,
+                "final_token": final_token, "is_tracked_url1": False, "status": "active"
+            }
+            collection.update_one({"_id": APP_DB_KEY}, {"$set": {"data": current_data}}, upsert=True)
+
+            webhook_payload = {
+                "auth_token": final_token, "app_signature": app_signature,
+                "start_time": date_time_now_obj.strftime('%Y-%m-%d %H:%M:%S'),
+                "expire_time": FIXED_EXPIRY_DATE.strftime('%Y-%m-%d %H:%M:%S'),
+                "status": "active"
+            }
+            send_webhook_to_server1(webhook_payload)
+
+            return jsonify({"status": "success", "url": final_token, "message": "Generated new 10-days key"}), 200
+
+        # ---------------------------------------------------------
+        # 2. पुराना सिस्टम (8 जुलाई 2026 के बाद अपने आप शुरू हो जाएगा)
+        # ---------------------------------------------------------
+        else:
+            logger.info("Running regular 24-hours Arolinks logic (After 8 July 2026)")
+            
+            # 24 घंटे वाली एक्टिव की (Key) चेक करना
+            for token, entry in current_data.items():
+                if entry.get("app_signature") == app_signature:
+                    created_time = datetime.fromisoformat(entry["created_at"]).timestamp()
+                    hours_diff = (current_time - created_time) / 3600
+                    if hours_diff < 24:
+                        return jsonify({
+                            "status": "success",
+                            "url": entry["short_url"],
+                            "message": "Active 24-hour session found"
+                        }), 200
+
+            # एक्सपायर हो चुकी की (Key) रीयूज़ करना
+            reused_token = None
+            for token, entry in current_data.items():
+                created_time = datetime.fromisoformat(entry["created_at"]).timestamp()
+                hours_diff = (current_time - created_time) / 3600
+                if hours_diff >= 24:
+                    reused_token = token
+                    break
+
+            if reused_token:
+                new_final_token = secrets.token_hex(16)
+                entry = current_data[reused_token]
+                entry.update({
+                    "ip": user_ip, "app_signature": app_signature, 
+                    "created_at": date_time_now, "status": "active", 
+                    "final_token": new_final_token
+                })
+                if "is_tracked_url1" in entry: entry["is_tracked_url1"] = False
+                
+                collection.update_one({"_id": APP_DB_KEY}, {"$set": {"data": current_data}}, upsert=True)
+                
+                webhook_payload = {
+                    "auth_token": new_final_token, "app_signature": app_signature,
+                    "start_time": date_time_now_obj.strftime('%Y-%m-%d %H:%M:%S'),
+                    "expire_time": (date_time_now_obj + timedelta(hours=24)).strftime('%Y-%m-%d %H:%M:%S'),
+                    "status": "active"
+                }
+                send_webhook_to_server1(webhook_payload)
+                
+                # यहाँ Arolinks का पुराना URL ही वापस भेजा जाएगा
+                return jsonify({"status": "success", "url": entry.get("short_url", ""), "message": "Reused expired key"}), 200
+
+            # नई की (Key) बनाना (Arolinks के साथ)
+            tracking_token = secrets.token_hex(16)
+            final_token = secrets.token_hex(16)
+            
+            tracking_api_url_1 = f"https://study.edumate.life/app/?api=1&token={tracking_token}"
+            aro_req_url = f"https://arolinks.com/api?api={FA_KEY}&url={quote(tracking_api_url_1)}&format=json"
+            
+            aro_response = requests.get(aro_req_url, headers={'User-Agent': 'Mozilla/5.0'})
+            aro_json = aro_response.json()
+
+            if aro_json.get('status') == 'success':
+                aro_shortened_url = aro_json.get('shortenedUrl')
+                current_data[tracking_token] = {
+                    "ip": user_ip, "app_signature": app_signature, "created_at": date_time_now,
+                    "short_url": aro_shortened_url, "tracking_url_1": tracking_api_url_1,       
+                    "final_token": final_token, "is_tracked_url1": False, "status": "active"
+                }
+                collection.update_one({"_id": APP_DB_KEY}, {"$set": {"data": current_data}}, upsert=True)
+
+                webhook_payload = {
+                    "auth_token": final_token, "app_signature": app_signature,
+                    "start_time": date_time_now_obj.strftime('%Y-%m-%d %H:%M:%S'),
+                    "expire_time": (date_time_now_obj + timedelta(hours=24)).strftime('%Y-%m-%d %H:%M:%S'),
+                    "status": "active"
+                }
+                send_webhook_to_server1(webhook_payload)
+
+                return jsonify({"status": "success", "url": aro_shortened_url, "message": "Generated new key (Arolinks)"}), 200
+            else:
+                raise Exception(f"Arolinks Error: {aro_json.get('message', 'Arolinks API Failure')}")
+
+    except Exception as e:
+        logger.exception(f"An unexpected error occurred: {str(e)}")
+        return jsonify({"status": "error", "message": str(e)}), 200
 
 @app.route('/app/', methods=['GET', 'OPTIONS', 'POST', 'PUT', 'DELETE'])
 def app_token_handler12():
