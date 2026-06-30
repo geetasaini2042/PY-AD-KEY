@@ -713,7 +713,7 @@ def check_premium_key():
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
         
-@app.route('/auth-Key/generate-token/', methods=['GET', 'POST', 'OPTIONS'])
+@app.route('/auth-Key1/generate-token/', methods=['GET', 'POST', 'OPTIONS'])
 def handler():
     # OPTIONS रिक्वेस्ट के लिए 200 स्टेटस लौटाएं
     if request.method == 'OPTIONS':
