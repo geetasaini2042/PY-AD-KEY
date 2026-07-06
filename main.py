@@ -178,6 +178,24 @@ def save_user_details():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+
+@app.route('/bad_app_list.json', methods=['GET'])
+def get_bad_apps():
+    bad_apps = [
+        "com.guoshi.httpcanary", 
+        "com.guoshi.httpcanary.premium", 
+        "app.greyshirts.sslcapture", 
+        "com.minhui.networkcapture", 
+        "com.reqable.android",
+        "com.network.proxy",
+        "com.anetcapture.mock",
+        "com.scheler.superproxy",
+        "com.studyapkmod"
+    ]
+    # यह लिस्ट को JSON फॉर्मेट में बदल कर भेज देगा
+    return jsonify(bad_apps)
+
+
 @app.route('/api/v2/active_tokens', methods=['GET'])
 def get_all_active_tokens():
     active_tokens = {}
