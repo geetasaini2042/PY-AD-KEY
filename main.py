@@ -189,8 +189,7 @@ def get_bad_apps():
         "com.reqable.android",
         "com.network.proxy",
         "com.anetcapture.mock",
-        "com.scheler.superproxy",
-        "com.studyapkmod"
+        "com.scheler.superproxy"
     ]
     # यह लिस्ट को JSON फॉर्मेट में बदल कर भेज देगा
     return jsonify(bad_apps)
