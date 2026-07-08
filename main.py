@@ -230,7 +230,7 @@ def generate_short_link():
     encoded_timestamp = base64.urlsafe_b64encode(timestamp_str.encode('utf-8')).decode('utf-8')
 
     # 4. Long URL बनाएँ
-    long_url = f"https://study.edumate.life?token={encoded_code}"
+    long_url = f"https://study.edumate.life/api/v2/keyaccess?token={encoded_code}"
 
     # 5. URL शॉर्टनर API को कॉल करें
     api_key = "20612dab97c48d8bf10f686f44eda1000d8feac0"
@@ -271,6 +271,245 @@ def generate_short_link():
     
     return resp
 
+
+def send_telegram_alert(profile_id, elapsed_time_str, reason):
+    bot_token = "8292521812:AAFukmxihMZId4elnEA6Ne_KKYw4NrMXwuc"
+    chat_id = "-1004314655959"
+    
+    # Get shortened URL from MongoDB if available
+    shortened_url = "Not Available"
+    if profile_id:
+        record = collection.find_one({"profile_id": profile_id})
+        if record:
+            shortened_url = record.get("shortened_url", "Not Available")
+
+    message = f"🚨 Suspicious Activity Detected!\n\n" \
+              f"Reason: {reason}\n" \
+              f"Profile ID: {profile_id if profile_id else 'Unknown'}\n" \
+              f"Shortened URL: {shortened_url}\n" \
+              f"Time Taken: {elapsed_time_str}"
+              
+    telegram_url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+    payload = {"chat_id": chat_id, "text": message}
+    
+    try:
+        requests.post(telegram_url, json=payload)
+    except Exception as e:
+        print(f"Telegram Error: {e}")
+
+# Error HTML Helper
+def get_error_html(error_message):
+    html_template = """
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-6225893138851886" crossorigin="anonymous"></script>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Error</title>
+        <style>
+            body { display: flex; justify-content: center; align-items: center; height: 100vh; background-color: #ffe6e6; color: #cc0000; font-family: Arial, sans-serif; margin: 0; }
+            .error-box { padding: 30px; border: 2px solid #cc0000; background-color: #fff; border-radius: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); }
+        </style>
+    </head>
+    <body>
+        <div class="error-box">
+            <h2>{{ message }}</h2>
+        </div>
+    </body>
+    </html>
+    """
+    return render_template_string(html_template, message=error_message)
+
+# Success HTML Helper (Spinning circle turns into checkmark)
+def get_success_html():
+    html_template = """
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-6225893138851886" crossorigin="anonymous"></script>
+        <title>Verification Successful</title>
+        <style>
+            body { display: flex; justify-content: center; align-items: center; height: 100vh; background-color: #f0fdf4; margin: 0; font-family: Arial, sans-serif; }
+            .wrapper { text-align: center; }
+            
+            /* Spinner CSS */
+            .icon-box {
+                width: 70px; height: 70px;
+                border-radius: 50%;
+                border: 5px solid #d1fae5;
+                border-top-color: #10b981;
+                margin: 0 auto;
+                position: relative;
+                animation: spin 1s linear infinite;
+                box-sizing: border-box;
+            }
+            
+            /* Success state (Checkmark) */
+            .icon-box.success {
+                animation: none;
+                border-color: #10b981;
+                background-color: #10b981;
+                transition: all 0.3s ease;
+            }
+            .icon-box.success::after {
+                content: '';
+                position: absolute;
+                left: 23px; top: 12px;
+                width: 14px; height: 30px;
+                border: solid white;
+                border-width: 0 5px 5px 0;
+                transform: rotate(45deg);
+                box-sizing: border-box;
+            }
+            
+            @keyframes spin { 100% { transform: rotate(360deg); } }
+            
+            .msg { margin-top: 20px; color: #10b981; font-size: 1.5rem; font-weight: bold; opacity: 0; transition: opacity 0.5s; }
+            .msg.show { opacity: 1; }
+        </style>
+    </head>
+    <body>
+        <div class="wrapper">
+            <div id="status-icon" class="icon-box"></div>
+            <div id="status-text" class="msg">Verification Successful</div>
+        </div>
+
+        <script>
+            // Javascript to change spinner to checkmark after 1.5 seconds
+            setTimeout(() => {
+                document.getElementById('status-icon').classList.add('success');
+                document.getElementById('status-text').classList.add('show');
+            }, 1500);
+        </script>
+    </body>
+    </html>
+    """
+    return render_template_string(html_template)
+
+@app.route('/api/v2/keyaccess', methods=['GET'])
+def verify_key_access():
+    token = request.args.get('token')
+    cache_ts = request.cookies.get('cache_ts')
+    cache_code = request.cookies.get('cache_code')
+
+    # 1. Check Cookies and Token existence
+    if not cache_ts or not cache_code or not token:
+        send_telegram_alert(None, "0 seconds", "Bypass Detected (Missing Cookies or Token)")
+        return get_error_html("Bypass Detected"), 403
+
+    # 2. Check if token matches cache_code
+    if token != cache_code:
+        send_telegram_alert(None, "0 seconds", "Bypass Detected (Token Mismatch)")
+        return get_error_html("Bypass Detected"), 403
+
+    try:
+        # 3. Decode Timestamp
+        timestamp_str = base64.urlsafe_b64decode(cache_ts).decode('utf-8')
+        aes_key = timestamp_str.ljust(32, '0').encode('utf-8')
+
+        # 4. Decode and Decrypt AES Code
+        encrypted_data = base64.urlsafe_b64decode(cache_code)
+        iv = encrypted_data[:16]
+        ciphertext = encrypted_data[16:]
+
+        cipher = AES.new(aes_key, AES.MODE_CBC, iv)
+        decrypted_bytes = unpad(cipher.decrypt(ciphertext), AES.block_size)
+        decrypted_str = decrypted_bytes.decode('utf-8')
+
+        # 5. Extract Profile ID and Original Timestamp
+        profile_id, original_ts_str = decrypted_str.split("::")
+        original_ts = float(original_ts_str)
+
+    except Exception as e:
+        send_telegram_alert(None, "0 seconds", f"Bypass Detected (Decryption Failed: {str(e)})")
+        return get_error_html("Bypass Detected"), 403
+
+    # 6. Calculate Time Difference
+    tz_kolkata = pytz.timezone('Asia/Kolkata')
+    current_ts = datetime.now(tz_kolkata).timestamp()
+    elapsed_seconds = current_ts - original_ts
+    
+    elapsed_minutes = int(elapsed_seconds // 60)
+    remaining_seconds = int(elapsed_seconds % 60)
+    exact_time_str = f"{elapsed_minutes} minutes {remaining_seconds} seconds"
+
+    # 7. Check if time is less than 2.5 minutes (150 seconds)
+    if elapsed_seconds < 150:
+        send_telegram_alert(profile_id, exact_time_str, "Fast Bypass Detected (< 2.5 mins)")
+        return get_error_html("Bypass detected referer not found"), 403
+
+    # 8. Update MongoDB (Set profile_id_verified to True)
+    collection.update_one(
+        {"profile_id": profile_id}, 
+        {"$set": {"profile_id_verified": True}}
+    )
+
+    # 9. Return Success HTML
+    return get_success_html(), 200
+
+@app.route('/api/v2/checkmyprofile', methods=['GET'])
+def check_my_profile():
+    # 1. रिक्वेस्ट से Profile ID प्राप्त करें
+    profile_id = request.args.get('profile_id')
+    
+    if not profile_id:
+        return jsonify({
+            "status": "error", 
+            "message": "Profile ID is required"
+        }), 400
+
+    # 2. MongoDB से उस Profile ID का रिकॉर्ड निकालें
+    record = collection.find_one({"profile_id": profile_id})
+    
+    # अगर रिकॉर्ड डेटाबेस में नहीं है
+    if not record:
+        return jsonify({
+            "status": "error", 
+            "message": "Profile ID not found"
+        }), 404
+
+    # 3. चेक करें कि प्रोफाइल वेरीफाई हुआ है या नहीं
+    is_verified = record.get("profile_id_verified", False)
+    
+    if not is_verified:
+        return jsonify({
+            "status": "error", 
+            "message": "Profile is not verified"
+        }), 403
+
+    # 4. 24 घंटे (24 Hours) की समय सीमा चेक करें
+    saved_timestamp_str = record.get("timestamp")
+    
+    if not saved_timestamp_str:
+        return jsonify({
+            "status": "error", 
+            "message": "Invalid record data (Timestamp missing)"
+        }), 500
+
+    saved_timestamp = float(saved_timestamp_str)
+    
+    tz_kolkata = pytz.timezone('Asia/Kolkata')
+    current_ts = datetime.now(tz_kolkata).timestamp()
+    
+    # वर्तमान समय और सेव किए गए समय के बीच का अंतर (सेकंड में)
+    elapsed_seconds = current_ts - saved_timestamp
+    
+    # 24 घंटे में 86400 सेकंड होते हैं (24 * 60 * 60)
+    if elapsed_seconds >= 86400:
+        return jsonify({
+            "status": "error", 
+            "message": "Verification expired. Please verify again."
+        }), 403
+
+    # 5. सब कुछ सही होने पर Success रिस्पॉन्स दें
+    return jsonify({
+        "status": "success",
+        "message": "Profile is verified and active",
+        "profile_id": profile_id
+    }), 200
 
 @app.route('/api/v2/active_tokens', methods=['GET'])
 def get_all_active_tokens():
