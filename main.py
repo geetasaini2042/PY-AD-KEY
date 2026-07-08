@@ -10,6 +10,10 @@ import os, json
 import random
 import logging
 from bson import ObjectId
+import base64
+from Crypto.Cipher import AES
+from Crypto.Util.Padding import pad
+from Crypto.Random import get_random_bytes
 
 
 
@@ -194,6 +198,78 @@ def get_bad_apps():
     ]
     # यह लिस्ट को JSON फॉर्मेट में बदल कर भेज देगा
     return jsonify(bad_apps)
+
+# मान लीजिए कि 'app' और 'collection' पहले से ही आपके कोड में परिभाषित हैं।
+
+@app.route('/api/v2/generate_shortlink', methods=['GET'])
+def generate_short_link():
+    # 1. रिक्वेस्ट से Profile ID प्राप्त करें
+    profile_id = request.args.get('profile_id')
+    if not profile_id:
+        return jsonify({"error": "Profile ID not found"}), 400
+
+    # 2. IST टाइमस्टैम्प प्राप्त करें
+    tz_kolkata = pytz.timezone('Asia/Kolkata')
+    current_time = datetime.now(tz_kolkata)
+    timestamp_str = str(current_time.timestamp())
+
+    # 3. AES एन्क्रिप्शन के लिए की (Key) तैयार करें
+    # टाइमस्टैम्प को 32 बाइट्स का बनाने के लिए दाईं ओर '0' से पैड करें (AES-256 के लिए)
+    aes_key = timestamp_str.ljust(32, '0').encode('utf-8')
+    
+    # जो डेटा एन्क्रिप्ट करना है
+    raw_string = f"{profile_id}::{timestamp_str}"
+    
+    # AES (CBC मोड) का उपयोग करके एन्क्रिप्ट करें
+    iv = get_random_bytes(16)
+    cipher = AES.new(aes_key, AES.MODE_CBC, iv)
+    encrypted_bytes = cipher.encrypt(pad(raw_string.encode('utf-8'), AES.block_size))
+    
+    # IV और एन्क्रिप्टेड डेटा को जोड़कर URL-safe Base64 में बदलें
+    encoded_code = base64.urlsafe_b64encode(iv + encrypted_bytes).decode('utf-8')
+    encoded_timestamp = base64.urlsafe_b64encode(timestamp_str.encode('utf-8')).decode('utf-8')
+
+    # 4. Long URL बनाएँ
+    long_url = f"https://study.edumate.life?token={encoded_code}"
+
+    # 5. URL शॉर्टनर API को कॉल करें
+    api_key = "20612dab97c48d8bf10f686f44eda1000d8feac0"
+    shortener_api_url = "https://arolinks.com/api"
+    
+    try:
+        response = requests.get(shortener_api_url, params={"api": api_key, "url": long_url})
+        data = response.json()
+        
+        if data.get("status") == "success":
+            shortened_url = data.get("shortenedUrl")
+        else:
+            return jsonify({"error": "URL शार्ट करने में विफल"}), 500
+            
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+    # 6. MongoDB में डेटा सेव करें (Upsert का उपयोग)
+    db_record = {
+        "profile_id": profile_id,
+        "timestamp": timestamp_str, 
+        "encoded_code": encoded_code,
+        "shortened_url": shortened_url,
+        "updated_at": current_time.strftime('%Y-%m-%d %H:%M:%S')
+    }
+    
+    collection.update_one(
+        {"profile_id": profile_id}, 
+        {"$set": db_record}, 
+        upsert=True
+    )
+
+    # 7. शार्ट किए गए URL पर रीडायरेक्ट करें और ब्राउज़र में कुकीज़ (Cookies) सेट करें
+    resp = make_response(redirect(shortened_url))
+    # max_age = 2592000 (30 दिन के लिए सेकंड्स में, आप इसे अपनी ज़रूरत के अनुसार बदल सकते हैं)
+    resp.set_cookie('cache_ts', encoded_timestamp, max_age=2592000)
+    resp.set_cookie('cache_code', encoded_code, max_age=2592000)
+    
+    return resp
 
 
 @app.route('/api/v2/active_tokens', methods=['GET'])
