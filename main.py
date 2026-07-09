@@ -15,6 +15,7 @@ from Crypto.Cipher import AES
 from Crypto.Util.Padding import pad, unpad
 from Crypto.Random import get_random_bytes
 
+
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
@@ -197,7 +198,8 @@ def get_bad_apps():
     # यह लिस्ट को JSON फॉर्मेट में बदल कर भेज देगा
     return jsonify(bad_apps)
 
-# मान लीजिए कि 'app' और 'collection' पहले से ही आपके कोड में परिभाषित हैं।
+
+
 
 @app.route('/api/v2/generate_shortlink', methods=['GET'])
 def generate_short_link():
@@ -212,27 +214,33 @@ def generate_short_link():
     timestamp_str = str(current_time.timestamp())
 
     # 3. AES एन्क्रिप्शन के लिए की (Key) तैयार करें
-    # टाइमस्टैम्प को 32 बाइट्स का बनाने के लिए दाईं ओर '0' से पैड करें (AES-256 के लिए)
     aes_key = timestamp_str.ljust(32, '0').encode('utf-8')
-    
-    # जो डेटा एन्क्रिप्ट करना है
     raw_string = f"{profile_id}::{timestamp_str}"
     
-    # AES (CBC मोड) का उपयोग करके एन्क्रिप्ट करें
     iv = get_random_bytes(16)
     cipher = AES.new(aes_key, AES.MODE_CBC, iv)
     encrypted_bytes = cipher.encrypt(pad(raw_string.encode('utf-8'), AES.block_size))
     
-    # IV और एन्क्रिप्टेड डेटा को जोड़कर URL-safe Base64 में बदलें
     encoded_code = base64.urlsafe_b64encode(iv + encrypted_bytes).decode('utf-8')
     encoded_timestamp = base64.urlsafe_b64encode(timestamp_str.encode('utf-8')).decode('utf-8')
 
-    # 4. Long URL बनाएँ
-    long_url = f"https://key.lnkz.tech/api/v2/keyaccess?token={encoded_code}"
+    # 4. डोमेन चेक करें और उसके अनुसार API Key और Long URL सेट करें
+    request_host = request.host  # उदाहरण: 'study.edumate.life' या 'key.lnkz.tech'
+    host_url = request.host_url.rstrip('/')  # उदाहरण: 'https://study.edumate.life'
+
+    if 'study.edumate.life' in request_host:
+        api_key = "20612dab97c48d8bf10f686f44eda1000d8feac0"
+        long_url = f"{host_url}/api/v2/keyaccess?token={encoded_code}"
+        
+    elif 'key.lnkz.tech' in request_host:
+        api_key = "2c2c2d013bb11762d35eaf99713077879d43bf91"
+        long_url = f"{host_url}/api/apiaccessme/?token={encoded_code}"
+        
+    else:
+        # अगर डोमेन मैच नहीं करता है तो एरर लौटाएं
+        return jsonify({"error": "अमान्य डोमेन (Invalid Domain)"}), 403
 
     # 5. URL शॉर्टनर API को कॉल करें
-    # api_key = "20612dab97c48d8bf10f686f44eda1000d8feac0"
-    api_key = "2c2c2d013bb11762d35eaf99713077879d43bf91"
     shortener_api_url = "https://arolinks.com/api"
     
     try:
@@ -264,7 +272,6 @@ def generate_short_link():
 
     # 7. शार्ट किए गए URL पर रीडायरेक्ट करें और ब्राउज़र में कुकीज़ (Cookies) सेट करें
     resp = make_response(redirect(shortened_url))
-    # max_age = 2592000 (30 दिन के लिए सेकंड्स में, आप इसे अपनी ज़रूरत के अनुसार बदल सकते हैं)
     resp.set_cookie('cache_ts', encoded_timestamp, max_age=2592000)
     resp.set_cookie('cache_code', encoded_code, max_age=2592000)
     
@@ -387,6 +394,52 @@ def get_success_html():
     </html>
     """
     return render_template_string(html_template)
+
+@app.route('/api/apiaccessme/', methods=['GET'])
+def verify_api_access_me():
+    token = request.args.get('token')
+    cache_ts = request.cookies.get('cache_ts')
+    cache_code = request.cookies.get('cache_code')
+
+    # 1. कुकीज़ (Cookies) और टोकन की मौजूदगी चेक करें
+    if not cache_ts or not cache_code or not token:
+        send_telegram_alert(None, "0 seconds", "Bypass Detected (Missing Cookies or Token)")
+        return get_error_html("Bypass Detected"), 403
+
+    # 2. चेक करें कि टोकन cache_code से मैच करता है या नहीं
+    if token != cache_code:
+        send_telegram_alert(None, "0 seconds", "Bypass Detected (Token Mismatch)")
+        return get_error_html("Bypass Detected"), 403
+
+    try:
+        # 3. टाइमस्टैम्प को डिकोड करें
+        timestamp_str = base64.urlsafe_b64decode(cache_ts).decode('utf-8')
+        aes_key = timestamp_str.ljust(32, '0').encode('utf-8')
+
+        # 4. AES कोड को डिकोड और डिक्रिप्ट करें
+        encrypted_data = base64.urlsafe_b64decode(cache_code)
+        iv = encrypted_data[:16]
+        ciphertext = encrypted_data[16:]
+
+        cipher = AES.new(aes_key, AES.MODE_CBC, iv)
+        decrypted_bytes = unpad(cipher.decrypt(ciphertext), AES.block_size)
+        decrypted_str = decrypted_bytes.decode('utf-8')
+
+        # 5. Profile ID निकालें (यहाँ टाइम चेक नहीं करना है, इसलिए सिर्फ ID निकाल रहे हैं)
+        profile_id, original_ts_str = decrypted_str.split("::")
+
+    except Exception as e:
+        send_telegram_alert(None, "0 seconds", f"Bypass Detected (Decryption Failed: {str(e)})")
+        return get_error_html("Bypass Detected"), 403
+
+    # 6. MongoDB को अपडेट करें (बिना समय देखे सीधे profile_id_verified को True सेट करें)
+    collection.update_one(
+        {"profile_id": profile_id}, 
+        {"$set": {"profile_id_verified": True}}
+    )
+
+    # 7. सफलता (Success) HTML लौटाएं
+    return get_success_html(), 200
 
 @app.route('/api/v2/keyaccess', methods=['GET'])
 def verify_key_access():
