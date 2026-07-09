@@ -228,10 +228,11 @@ def generate_short_link():
     encoded_timestamp = base64.urlsafe_b64encode(timestamp_str.encode('utf-8')).decode('utf-8')
 
     # 4. Long URL बनाएँ
-    long_url = f"https://study.edumate.life/api/v2/keyaccess?token={encoded_code}"
+    long_url = f"https://key.lnkz.tech/api/v2/keyaccess?token={encoded_code}"
 
     # 5. URL शॉर्टनर API को कॉल करें
-    api_key = "20612dab97c48d8bf10f686f44eda1000d8feac0"
+    # api_key = "20612dab97c48d8bf10f686f44eda1000d8feac0"
+    api_key = "2c2c2d013bb11762d35eaf99713077879d43bf91"
     shortener_api_url = "https://arolinks.com/api"
     
     try:
