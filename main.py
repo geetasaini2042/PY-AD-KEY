@@ -425,20 +425,42 @@ def verify_api_access_me():
         decrypted_bytes = unpad(cipher.decrypt(ciphertext), AES.block_size)
         decrypted_str = decrypted_bytes.decode('utf-8')
 
-        # 5. Profile ID निकालें (यहाँ टाइम चेक नहीं करना है, इसलिए सिर्फ ID निकाल रहे हैं)
+        # 5. Profile ID और Original Timestamp निकालें
         profile_id, original_ts_str = decrypted_str.split("::")
+        original_ts = float(original_ts_str)
 
     except Exception as e:
         send_telegram_alert(None, "0 seconds", f"Bypass Detected (Decryption Failed: {str(e)})")
         return get_error_html("Bypass Detected"), 403
 
-    # 6. MongoDB को अपडेट करें (बिना समय देखे सीधे profile_id_verified को True सेट करें)
+    # 6. समय की गणना करें (कितने टाइम में वेरीफाई हुआ)
+    tz_kolkata = pytz.timezone('Asia/Kolkata')
+    current_ts = datetime.now(tz_kolkata).timestamp()
+    elapsed_seconds = current_ts - original_ts
+    
+    elapsed_minutes = int(elapsed_seconds // 60)
+    remaining_seconds = int(elapsed_seconds % 60)
+    exact_time_str = f"{elapsed_minutes} minutes {remaining_seconds} seconds"
+
+    # 7. MongoDB को अपडेट करें (सीधे profile_id_verified को True सेट करें)
     collection.update_one(
         {"profile_id": profile_id}, 
         {"$set": {"profile_id_verified": True}}
     )
 
-    # 7. सफलता (Success) HTML लौटाएं
+    # 8. टेलीग्राम पर वेरिफिकेशन सक्सेस और समय का मैसेज भेजें
+    try:
+        bot_token = "8292521812:AAFukmxihMZId4elnEA6Ne_KKYw4NrMXwuc"
+        chat_id = "-1004433335002"
+        telegram_text = f"New key verified\nUser Profile ID: {profile_id}\nTime Taken: {exact_time_str}"
+        telegram_api_url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+        
+        # टेलीग्राम API को रिक्वेस्ट भेजें
+        requests.post(telegram_api_url, json={"chat_id": chat_id, "text": telegram_text}, timeout=5)
+    except Exception as e:
+        print(f"Telegram notification failed: {str(e)}")
+
+    # 9. सफलता (Success) HTML लौटाएं
     return get_success_html(), 200
 
 @app.route('/api/v2/keyaccess', methods=['GET'])
