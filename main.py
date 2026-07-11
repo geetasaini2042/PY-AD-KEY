@@ -16,10 +16,10 @@ from Crypto.Util.Padding import pad, unpad
 from Crypto.Random import get_random_bytes
 
 
-logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
-
-
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s"
+)
 APP_DB_KEY = "apps_data_token"
 APP_UNLIMITED_DB_KEY = "app_unlimited_tokens_data" 
 # --- 1. कॉन्फ़िगरेशन (Configuration) ---
