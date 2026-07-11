@@ -363,8 +363,14 @@ def get_bad_apps():
     # यह लिस्ट को JSON फॉर्मेट में बदल कर भेज देगा
     return jsonify(bad_apps)
 
-
-
+from flask import request, jsonify, make_response, redirect
+from datetime import datetime
+import pytz
+import base64
+import requests
+from Crypto.Cipher import AES
+from Crypto.Util.Padding import pad
+from Crypto.Random import get_random_bytes
 
 @app.route('/api/v2/generate_shortlink', methods=['GET'])
 def generate_short_link():
@@ -390,8 +396,8 @@ def generate_short_link():
     encoded_timestamp = base64.urlsafe_b64encode(timestamp_str.encode('utf-8')).decode('utf-8')
 
     # 4. डोमेन चेक करें और उसके अनुसार API Key और Long URL सेट करें
-    request_host = request.host  # उदाहरण: 'study.edumate.life' या 'key.lnkz.tech'
-    host_url = request.host_url.rstrip('/')  # उदाहरण: 'https://study.edumate.life'
+    request_host = request.host  
+    host_url = request.host_url.rstrip('/')  
 
     if 'study.edumate.life' in request_host:
         api_key = "20612dab97c48d8bf10f686f44eda1000d8feac0"
@@ -402,7 +408,6 @@ def generate_short_link():
         long_url = f"{host_url}/api/apiaccessme/?token={encoded_code}"
         
     else:
-        # अगर डोमेन मैच नहीं करता है तो एरर लौटाएं
         return jsonify({"error": "अमान्य डोमेन (Invalid Domain)"}), 403
 
     # 5. URL शॉर्टनर API को कॉल करें
@@ -420,7 +425,7 @@ def generate_short_link():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-    # 6. MongoDB में डेटा सेव करें (Upsert का उपयोग)
+    # 6. MongoDB में डेटा सेव करें (पुराना डेटा डिलीट करके नया सेव करें)
     db_record = {
         "profile_id": profile_id,
         "timestamp": timestamp_str, 
@@ -429,11 +434,11 @@ def generate_short_link():
         "updated_at": current_time.strftime('%Y-%m-%d %H:%M:%S')
     }
     
-    collection.update_one(
-        {"profile_id": profile_id}, 
-        {"$set": db_record}, 
-        upsert=True
-    )
+    # पहले इस profile_id का कोई भी पुराना रिकॉर्ड हो उसे पूरी तरह डिलीट कर दें
+    collection.delete_many({"profile_id": profile_id})
+    
+    # अब फ्रेश डेटा इन्सर्ट करें (ताकि profile_id_verified जैसी पुरानी चीजें हट जाएं)
+    collection.insert_one(db_record)
 
     # 7. शार्ट किए गए URL पर रीडायरेक्ट करें और ब्राउज़र में कुकीज़ (Cookies) सेट करें
     resp = make_response(redirect(shortened_url))
