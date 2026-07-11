@@ -149,6 +149,170 @@ def send_to_telegram(data):
             except Exception as e:
                 print(f"Telegram Error (Part {i}):", e)
 
+def get_admin_html():
+    html_template = """
+    <!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin Panel - Edit JSON</title>
+    <style>
+        body { font-family: Arial, sans-serif; padding: 20px; background-color: #f4f4f9; }
+        .container { max-width: 900px; margin: auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
+        textarea { width: 100%; height: 500px; font-family: monospace; padding: 10px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; }
+        .btn { padding: 10px 20px; margin-top: 15px; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; }
+        .btn-save { background-color: #28a745; color: white; }
+        .btn-reload { background-color: #007bff; color: white; }
+        #statusMessage { margin-top: 15px; font-weight: bold; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h2>JSON Editor - MongoDB Data</h2>
+    <p>यहाँ आप डेटा को JSON फॉर्मेट में एडिट कर सकते हैं। कैशे को रोकने के लिए डेटा हर बार सीधा सर्वर से लाया जाता है।</p>
+    
+    <textarea id="jsonEditor">लोड हो रहा है...</textarea>
+    
+    <br>
+    <button class="btn btn-save" onclick="saveData()">💾 सेव करें (Save)</button>
+    <button class="btn btn-reload" onclick="loadData()">🔄 फिर से लोड करें (Reload)</button>
+    
+    <div id="statusMessage"></div>
+</div>
+
+<script>
+    // डेटा लोड करने का फंक्शन (कैशे से बचने के लिए URL में टाइमस्टैम्प जोड़ा गया है)
+    function loadData() {
+        document.getElementById('statusMessage').innerText = "डेटा लाया जा रहा है...";
+        document.getElementById('statusMessage').style.color = "blue";
+        
+        // Cache-Busting तकनीक: ?t=current_timestamp
+        const url = '/api/admin/get_data?t=' + new Date().getTime();
+
+        fetch(url, {
+            method: 'GET',
+            headers: { 'Cache-Control': 'no-cache', 'Pragma': 'no-cache' }
+        })
+        .then(response => response.json())
+        .then(data => {
+            // JSON को सुंदर (formatted) तरीके से टेक्स्टेरिया में दिखाएं
+            document.getElementById('jsonEditor').value = JSON.stringify(data, null, 4);
+            document.getElementById('statusMessage').innerText = "डेटा सफलतापूर्वक लोड हो गया!";
+            document.getElementById('statusMessage').style.color = "green";
+            
+            setTimeout(() => document.getElementById('statusMessage').innerText = "", 3000);
+        })
+        .catch(error => {
+            document.getElementById('statusMessage').innerText = "डेटा लोड करने में एरर: " + error;
+            document.getElementById('statusMessage').style.color = "red";
+        });
+    }
+
+    // डेटा सेव करने का फंक्शन
+    function saveData() {
+        const jsonText = document.getElementById('jsonEditor').value;
+        let parsedData;
+
+        try {
+            // चेक करें कि एडमिन ने सही JSON लिखा है या नहीं
+            parsedData = JSON.parse(jsonText);
+        } catch (e) {
+            document.getElementById('statusMessage').innerText = "❌ अमान्य JSON (Invalid JSON)! कृपया सिंटैक्स चेक करें।";
+            document.getElementById('statusMessage').style.color = "red";
+            return;
+        }
+
+        document.getElementById('statusMessage').innerText = "सेव किया जा रहा है...";
+        document.getElementById('statusMessage').style.color = "blue";
+
+        fetch('/api/admin/save_data', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(parsedData)
+        })
+        .then(response => response.json())
+        .then(data => {
+            if(data.status === "success") {
+                document.getElementById('statusMessage').innerText = "✅ " + data.message;
+                document.getElementById('statusMessage').style.color = "green";
+                // सेव करने के तुरंत बाद ताज़ा डेटा लोड करें ताकि कैशे पूरी तरह खत्म हो जाए
+                setTimeout(loadData, 1000); 
+            } else {
+                document.getElementById('statusMessage').innerText = "❌ एरर: " + data.error;
+                document.getElementById('statusMessage').style.color = "red";
+            }
+        })
+        .catch(error => {
+            document.getElementById('statusMessage').innerText = "❌ नेटवर्क एरर: " + error;
+            document.getElementById('statusMessage').style.color = "red";
+        });
+    }
+
+    // पेज लोड होते ही डेटा लोड करें
+    window.onload = loadData;
+</script>
+
+</body>
+</html>
+
+    """
+    return render_template_string(html_template, message=error_message)
+@app.route('/api/admin/get_profils', methods=['GET'])
+def admin_get_profile():
+    return get_admin_html(), 200
+    
+@app.route('/api/admin/get_data', methods=['GET'])
+def admin_get_data():
+    try:
+        # MongoDB से सारा डेटा निकालें
+        data = list(collection.find({}))
+        
+        # ObjectId को JSON-serializable बनाने के लिए bson.json_util का उपयोग करें
+        json_data = json.loads(json_util.dumps(data))
+        
+        # रिस्पांस तैयार करें और कैशे (Cache) डिसेबल करें
+        response = make_response(jsonify(json_data))
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+        
+        return response
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# 2. एडिट किया हुआ डेटा सेव करने का राउट (POST)
+@app.route('/api/admin/save_data', methods=['POST'])
+def admin_save_data():
+    try:
+        updated_records = request.json
+        
+        if not isinstance(updated_records, list):
+            return jsonify({"error": "डेटा एक JSON एरे (Array) के रूप में होना चाहिए"}), 400
+
+        # हर रिकॉर्ड को लूप करें और अपडेट करें
+        for record in updated_records:
+            profile_id = record.get('profile_id')
+            if profile_id:
+                # MongoDB में '_id' को अपडेट नहीं किया जा सकता, इसलिए सेव करने से पहले इसे हटा दें
+                if '_id' in record:
+                    del record['_id']
+                
+                # Profile ID के आधार पर डेटा अपडेट करें
+                collection.update_one(
+                    {"profile_id": profile_id}, 
+                    {"$set": record}, 
+                    upsert=True
+                )
+                
+        return jsonify({"status": "success", "message": "डेटा सफलतापूर्वक सेव हो गया है!"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 @app.route('/user-details/prime_study_Official', methods=['POST'])
 def save_user_details():
     try:
