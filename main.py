@@ -260,7 +260,7 @@ def get_admin_html():
 </html>
 
     """
-    return render_template_string(html_template, message=error_message)
+    return render_template_string(html_template)
 @app.route('/api/admin/get_profils', methods=['GET'])
 def admin_get_profile():
     return get_admin_html(), 200
