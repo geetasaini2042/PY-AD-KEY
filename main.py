@@ -285,8 +285,6 @@ def admin_get_data():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-
-# 2. एडिट किया हुआ डेटा सेव करने का राउट (POST)
 @app.route('/api/admin/save_data', methods=['POST'])
 def admin_save_data():
     try:
@@ -295,24 +293,26 @@ def admin_save_data():
         if not isinstance(updated_records, list):
             return jsonify({"error": "डेटा एक JSON एरे (Array) के रूप में होना चाहिए"}), 400
 
-        # हर रिकॉर्ड को लूप करें और अपडेट करें
+        # 1. डेटाबेस से सारा पुराना डेटा पूरी तरह हटा दें
+        collection.delete_many({})
+
+        # 2. अगर एडमिन ने खाली एरे [] भेजा है, तो यहीं से सक्सेस रिटर्न कर दें
+        if len(updated_records) == 0:
+            return jsonify({"status": "success", "message": "सारा डेटा सफलतापूर्वक डिलीट कर दिया गया है!"})
+
+        # 3. अगर एरे में डेटा है, तो हर रिकॉर्ड से पुरानी '_id' हटा दें
+        # (ताकि MongoDB अपनी नई _id बना सके और कोई एरर न आए)
         for record in updated_records:
-            profile_id = record.get('profile_id')
-            if profile_id:
-                # MongoDB में '_id' को अपडेट नहीं किया जा सकता, इसलिए सेव करने से पहले इसे हटा दें
-                if '_id' in record:
-                    del record['_id']
-                
-                # Profile ID के आधार पर डेटा अपडेट करें
-                collection.update_one(
-                    {"profile_id": profile_id}, 
-                    {"$set": record}, 
-                    upsert=True
-                )
-                
+            if '_id' in record:
+                del record['_id']
+        
+        # 4. अब एडमिन का भेजा हुआ नया डेटा एक साथ इंसर्ट करें
+        collection.insert_many(updated_records)
+            
         return jsonify({"status": "success", "message": "डेटा सफलतापूर्वक सेव हो गया है!"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
 
 @app.route('/user-details/prime_study_Official', methods=['POST'])
 def save_user_details():
