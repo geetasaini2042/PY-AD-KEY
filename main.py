@@ -735,6 +735,7 @@ def verify_api_access_me():
     resp.set_cookie('session_token', '', max_age=0)
     
     return resp, 200
+
 @app.route('/api/v2/keyaccess', methods=['GET'])
 def verify_key_access_v2():
     token = request.args.get('token')
@@ -845,68 +846,6 @@ def check_my_profile():
         }), 403
 
     # 4. 24 घंटे (24 Hours) की समय सीमा चेक करें
-    saved_timestamp_str = record.get("timestamp")
-    
-    if not saved_timestamp_str:
-        return jsonify({
-            "status": "error", 
-            "message": "Invalid record data (Timestamp missing)"
-        }), 500
-
-    saved_timestamp = float(saved_timestamp_str)
-    
-    tz_kolkata = pytz.timezone('Asia/Kolkata')
-    current_ts = datetime.now(tz_kolkata).timestamp()
-    
-    # वर्तमान समय और सेव किए गए समय के बीच का अंतर (सेकंड में)
-    elapsed_seconds = current_ts - saved_timestamp
-    
-    # 24 घंटे में 86400 सेकंड होते हैं (24 * 60 * 60)
-    if elapsed_seconds >= 86400:
-        return jsonify({
-            "status": "error", 
-            "message": "Verification expired. Please verify again."
-        }), 403
-
-    # 5. सब कुछ सही होने पर Success रिस्पॉन्स दें
-    return jsonify({
-        "status": "success",
-        "message": "Profile is verified and active",
-        "profile_id": profile_id
-    }), 200
-
-@app.route('/api/v2/checkmyprofile', methods=['GET'])
-def check_my_profile():
-    # 1. रिक्वेस्ट से Profile ID प्राप्त करें
-    profile_id = request.args.get('profile_id')
-    
-    if not profile_id:
-        return jsonify({
-            "status": "error", 
-            "message": "Profile ID is required"
-        }), 400
-
-    # 2. MongoDB से उस Profile ID का रिकॉर्ड निकालें
-    record = collection.find_one({"profile_id": profile_id})
-    
-    # अगर रिकॉर्ड डेटाबेस में नहीं है
-    if not record:
-        return jsonify({
-            "status": "error", 
-            "message": "Profile ID not found"
-        }), 404
-
-    # 3. चेक करें कि प्रोफाइल वेरीफाई हुआ है या नहीं
-    is_verified = record.get("profile_id_verified", False)
-    
-    if not is_verified:
-        return jsonify({
-            "status": "error", 
-            "message": "Profile is not verified"
-        }), 403
-
-    # 4. 24 घंटे (24 Hours) की समय सीमा चेक करें
-    # नए सिस्टम के अनुसार हम 'verified_on' चेक करेंगे
     verified_on = record.get("verified_on")
     
     if not verified_on:
@@ -922,6 +861,11 @@ def check_my_profile():
     
     # 24 घंटे में 86400 सेकंड होते हैं
     if elapsed_seconds >= 86400:
+        # -----------------------------------------------------------------
+        # नया अपडेट: एक्सपायर हो चुके रिकॉर्ड को डेटाबेस से डिलीट कर दें
+        # -----------------------------------------------------------------
+        collection.delete_many({"profile_id": profile_id})
+        
         return jsonify({
             "status": "error", 
             "message": "Verification expired. Please verify again."
