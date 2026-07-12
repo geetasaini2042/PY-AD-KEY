@@ -875,48 +875,64 @@ def check_my_profile():
         "profile_id": profile_id
     }), 200
 
-@app.route('/api/v2/active_tokens', methods=['GET'])
-def get_all_active_tokens():
-    active_tokens = {}
-    tz_kolkata = pytz.timezone('Asia/Kolkata')
-    current_time_ts = datetime.now(tz_kolkata).timestamp()
+@app.route('/api/v2/checkmyprofile', methods=['GET'])
+def check_my_profile():
+    # 1. रिक्वेस्ट से Profile ID प्राप्त करें
+    profile_id = request.args.get('profile_id')
+    
+    if not profile_id:
+        return jsonify({
+            "status": "error", 
+            "message": "Profile ID is required"
+        }), 400
 
-    # 1. Standard 24h Tokens
-    doc = collection.find_one({"_id": APP_DB_KEY})
-    if doc and "data" in doc:
-        for tracking_key, entry in doc["data"].items():
-            created_dt = datetime.fromisoformat(entry["created_at"])
-            created_time = created_dt.timestamp()
-            
-            if (current_time_ts - created_time) / 3600 < 24:
-                final_token = entry.get("final_token")
-                active_tokens[final_token] = {
-                    "auth_token": final_token,
-                    "app_signature": entry.get("app_signature"),
-                    "start_time": created_dt.strftime('%Y-%m-%d %H:%M:%S'),
-                    "expire_time": (created_dt + timedelta(hours=24)).strftime('%Y-%m-%d %H:%M:%S'),
-                    "status": "active"
-                }
+    # 2. MongoDB से उस Profile ID का रिकॉर्ड निकालें
+    record = collection.find_one({"profile_id": profile_id})
+    
+    # अगर रिकॉर्ड डेटाबेस में नहीं है
+    if not record:
+        return jsonify({
+            "status": "error", 
+            "message": "Profile ID not found"
+        }), 404
 
-    # 2. Premium Tokens
-    premium_docs = premium_collection.find({"status": "active"})
-    for p in premium_docs:
-        final_token = p.get("final_token")
-        activated_dt = datetime.fromisoformat(p["activated_at"])
-        validity_days = p.get("validity_days", 30)
-        
-        expire_dt = activated_dt + timedelta(days=validity_days)
-        
-        if datetime.now(tz_kolkata) <= expire_dt:
-            active_tokens[final_token] = {
-                "auth_token": final_token,
-                "app_signature": p.get("app_device_id"),
-                "start_time": activated_dt.strftime('%Y-%m-%d %H:%M:%S'),
-                "expire_time": expire_dt.strftime('%Y-%m-%d %H:%M:%S'),
-                "status": "active"
-            }
+    # 3. चेक करें कि प्रोफाइल वेरीफाई हुआ है या नहीं
+    is_verified = record.get("profile_id_verified", False)
+    
+    if not is_verified:
+        return jsonify({
+            "status": "error", 
+            "message": "Profile is not verified"
+        }), 403
 
-    return jsonify(active_tokens), 200
+    # 4. 24 घंटे (24 Hours) की समय सीमा चेक करें
+    # नए सिस्टम के अनुसार हम 'verified_on' चेक करेंगे
+    verified_on = record.get("verified_on")
+    
+    if not verified_on:
+        return jsonify({
+            "status": "error", 
+            "message": "Invalid record data (Verification timestamp missing)"
+        }), 500
+
+    current_ts = time.time()
+    
+    # वर्तमान समय और वेरीफाई किए गए समय के बीच का अंतर (सेकंड में)
+    elapsed_seconds = current_ts - float(verified_on)
+    
+    # 24 घंटे में 86400 सेकंड होते हैं
+    if elapsed_seconds >= 86400:
+        return jsonify({
+            "status": "error", 
+            "message": "Verification expired. Please verify again."
+        }), 403
+
+    # 5. सब कुछ सही होने पर Success रिस्पॉन्स दें
+    return jsonify({
+        "status": "success",
+        "message": "Profile is verified and active",
+        "profile_id": profile_id
+    }), 200
 
 @app.route('/PW/schedule-details', methods=['GET'])
 def proxy_schedule_details():
