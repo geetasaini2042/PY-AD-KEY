@@ -15,7 +15,7 @@ import base64
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import pad, unpad
 from Crypto.Random import get_random_bytes
-
+import string
 
 
 
@@ -552,7 +552,9 @@ def get_success_html():
     </html>
 """
     return render_template_string(html_template)
- 
+def generate_random_token(length=10):
+    return ''.join(random.choices(string.ascii_letters + string.digits, k=length))
+
 @app.route('/api/v2/generate_shortlink', methods=['GET'])
 def generate_short_link():
     profile_id = request.args.get('profile_id')
