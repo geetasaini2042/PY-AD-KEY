@@ -17,6 +17,8 @@ from Crypto.Util.Padding import pad, unpad
 from Crypto.Random import get_random_bytes
 
 
+
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s"
@@ -363,90 +365,6 @@ def get_bad_apps():
     # यह लिस्ट को JSON फॉर्मेट में बदल कर भेज देगा
     return jsonify(bad_apps)
 
-from flask import request, jsonify, make_response, redirect
-from datetime import datetime
-import pytz
-import base64
-import requests
-from Crypto.Cipher import AES
-from Crypto.Util.Padding import pad
-from Crypto.Random import get_random_bytes
-
-@app.route('/api/v2/generate_shortlink', methods=['GET'])
-def generate_short_link():
-    # 1. रिक्वेस्ट से Profile ID प्राप्त करें
-    profile_id = request.args.get('profile_id')
-    if not profile_id:
-        return jsonify({"error": "Profile ID not found"}), 400
-
-    # 2. IST टाइमस्टैम्प प्राप्त करें
-    tz_kolkata = pytz.timezone('Asia/Kolkata')
-    current_time = datetime.now(tz_kolkata)
-    timestamp_str = str(current_time.timestamp())
-
-    # 3. AES एन्क्रिप्शन के लिए की (Key) तैयार करें
-    aes_key = timestamp_str.ljust(32, '0').encode('utf-8')
-    raw_string = f"{profile_id}::{timestamp_str}"
-    
-    iv = get_random_bytes(16)
-    cipher = AES.new(aes_key, AES.MODE_CBC, iv)
-    encrypted_bytes = cipher.encrypt(pad(raw_string.encode('utf-8'), AES.block_size))
-    
-    encoded_code = base64.urlsafe_b64encode(iv + encrypted_bytes).decode('utf-8')
-    encoded_timestamp = base64.urlsafe_b64encode(timestamp_str.encode('utf-8')).decode('utf-8')
-
-    # 4. डोमेन चेक करें और उसके अनुसार API Key और Long URL सेट करें
-    request_host = request.host  
-    host_url = request.host_url.rstrip('/')  
-
-    if 'study.edumate.life' in request_host:
-        api_key = "20612dab97c48d8bf10f686f44eda1000d8feac0"
-        long_url = f"{host_url}/api/v2/keyaccess?token={encoded_code}"
-        
-    elif 'key.lnkz.tech' in request_host:
-        api_key = "2c2c2d013bb11762d35eaf99713077879d43bf91"
-        long_url = f"{host_url}/api/apiaccessme/?token={encoded_code}"
-        
-    else:
-        return jsonify({"error": "अमान्य डोमेन (Invalid Domain)"}), 403
-
-    # 5. URL शॉर्टनर API को कॉल करें
-    shortener_api_url = "https://arolinks.com/api"
-    
-    try:
-        response = requests.get(shortener_api_url, params={"api": api_key, "url": long_url})
-        data = response.json()
-        
-        if data.get("status") == "success":
-            shortened_url = data.get("shortenedUrl")
-        else:
-            return jsonify({"error": "URL शार्ट करने में विफल"}), 500
-            
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-    # 6. MongoDB में डेटा सेव करें (पुराना डेटा डिलीट करके नया सेव करें)
-    db_record = {
-        "profile_id": profile_id,
-        "timestamp": timestamp_str, 
-        "encoded_code": encoded_code,
-        "shortened_url": shortened_url,
-        "updated_at": current_time.strftime('%Y-%m-%d %H:%M:%S')
-    }
-    
-    # पहले इस profile_id का कोई भी पुराना रिकॉर्ड हो उसे पूरी तरह डिलीट कर दें
-    collection.delete_many({"profile_id": profile_id})
-    
-    # अब फ्रेश डेटा इन्सर्ट करें (ताकि profile_id_verified जैसी पुरानी चीजें हट जाएं)
-    collection.insert_one(db_record)
-
-    # 7. शार्ट किए गए URL पर रीडायरेक्ट करें और ब्राउज़र में कुकीज़ (Cookies) सेट करें
-    resp = make_response(redirect(shortened_url))
-    resp.set_cookie('cache_ts', encoded_timestamp, max_age=2592000)
-    resp.set_cookie('cache_code', encoded_code, max_age=2592000)
-    
-    return resp
-
 
 def send_telegram_alert(profile_id, elapsed_time_str, reason):
     bot_token = "8292521812:AAFukmxihMZId4elnEA6Ne_KKYw4NrMXwuc"
@@ -634,136 +552,267 @@ def get_success_html():
     </html>
 """
     return render_template_string(html_template)
-    
+ 
+@app.route('/api/v2/generate_shortlink', methods=['GET'])
+def generate_short_link():
+    profile_id = request.args.get('profile_id')
+    if not profile_id:
+        return jsonify({"error": "Profile ID not found"}), 400
 
+    current_ts = time.time()
+    
+    # -------------------------------------------------------------------------
+    # 1. चेक करें कि यूज़र वेरीफाइड है और 'verified_on' 24 घंटे (86400 सेकंड) के अंदर है
+    # -------------------------------------------------------------------------
+    user_record = collection.find_one({"profile_id": profile_id})
+    
+    if user_record and user_record.get("profile_id_verified") == True:
+        verified_on = user_record.get("verified_on", 0)
+        
+        # अगर वेरीफाई हुए 24 घंटे (86400 सेकंड) से कम समय हुआ है, तो सीधा सक्सेस पेज दिखाएं
+        if (current_ts - verified_on) < 86400:
+            return get_success_html(), 200
+
+    # अगर वेरीफाइड नहीं है या 24 घंटे पूरे हो गए हैं, तो पुरानी एंट्री डिलीट करें
+    collection.delete_many({"profile_id": profile_id})
+    
+    # फ्रेश एंट्री इन्सर्ट करें (ताकि पहले का कोई बग न रहे)
+    collection.insert_one({
+        "profile_id": profile_id,
+        "profile_id_verified": False,
+        "timestamp": current_ts
+    })
+    # -------------------------------------------------------------------------
+
+    request_host = request.host  
+    host_url = request.host_url.rstrip('/')  
+
+    # डोमेन के अनुसार API और Path सेट करें
+    if 'study.edumate.life' in request_host:
+        api_key = "20612dab97c48d8bf10f686f44eda1000d8feac0"
+        access_path = "/api/v2/keyaccess"
+    elif 'key.lnkz.tech' in request_host:
+        api_key = "2c2c2d013bb11762d35eaf99713077879d43bf91"
+        access_path = "/api/apiaccessme/"
+    else:
+        return jsonify({"error": "अमान्य डोमेन (Invalid Domain)"}), 403
+
+    # स्टेप 1: जो कीज़ (Keys) 15 मिनट (900 सेकंड) से ज़्यादा समय से अटकी हैं, उन्हें फ्री करें
+    keys_pool_collection.update_many(
+        {
+            "domain": request_host,
+            "assigned_to": {"$ne": None}, 
+            "assigned_at": {"$lt": current_ts - 900}
+        },
+        {"$set": {"assigned_to": None, "assigned_at": None}}
+    )
+
+    assigned_token = None
+    shortened_url = None
+
+    # स्टेप 2: चेक करें कि क्या इस यूज़र के पास पहले से कोई एक्टिव की (Key) है?
+    user_existing_key = keys_pool_collection.find_one({"assigned_to": profile_id, "domain": request_host})
+    
+    if user_existing_key:
+        assigned_token = user_existing_key["token"]
+        shortened_url = user_existing_key["shortened_url"]
+        
+        # यूज़र के वापस आने पर उसका Timestamp अपडेट करें ताकि उसे और 15 मिनट मिल सकें
+        keys_pool_collection.update_one(
+            {"_id": user_existing_key["_id"]},
+            {"$set": {"assigned_at": current_ts}}
+        )
+    else:
+        # स्टेप 3: डेटाबेस से कोई 1 'फ्री' की (Key) निकालें
+        free_key = keys_pool_collection.find_one_and_update(
+            {"assigned_to": None, "domain": request_host}, 
+            {"$set": {"assigned_to": profile_id, "assigned_at": current_ts}}, 
+            return_document=True
+        )
+
+        if free_key:
+            assigned_token = free_key["token"]
+            shortened_url = free_key["shortened_url"]
+        else:
+            # स्टेप 4: अगर कोई भी की फ्री नहीं है, तो एक नई की बनाएँ
+            new_token = generate_random_token(12)
+            long_url = f"{host_url}{access_path}?token={new_token}"
+            
+            shortener_api_url = "https://arolinks.com/api"
+            try:
+                response = requests.get(shortener_api_url, params={"api": api_key, "url": long_url})
+                data = response.json()
+                
+                if data.get("status") == "success":
+                    shortened_url = data.get("shortenedUrl")
+                    assigned_token = new_token
+                else:
+                    return jsonify({"error": "URL शार्ट करने में विफल"}), 500
+            except Exception as e:
+                return jsonify({"error": str(e)}), 500
+
+            # नई की (Key) को डेटाबेस में सेव करें ताकि Key Pool की संख्या बढ़ सके
+            new_key_record = {
+                "token": new_token,
+                "domain": request_host,
+                "shortened_url": shortened_url,
+                "assigned_to": profile_id,
+                "assigned_at": current_ts
+            }
+            keys_pool_collection.insert_one(new_key_record)
+
+    # स्टेप 5: शार्ट यूआरएल पर भेजें और कुकीज़ को नए 30 मिनट (1800 सेकंड) के लिए सेट करें
+    resp = make_response(redirect(shortened_url))
+    resp.set_cookie('session_token', assigned_token, max_age=1800)
+    
+    return resp
+
+
+# दोनों राउट्स (Routes) को एक ही फंक्शन पर मैप कर दिया गया है
 @app.route('/api/apiaccessme/', methods=['GET'])
 def verify_api_access_me():
     token = request.args.get('token')
-    cache_ts = request.cookies.get('cache_ts')
-    cache_code = request.cookies.get('cache_code')
-
-    # 1. कुकीज़ (Cookies) और टोकन की मौजूदगी चेक करें
-    if not cache_ts or not cache_code or not token:
-        send_telegram_alert(None, "0 seconds", "Bypass Detected (Missing Cookies or Token)")
-        return get_error_html("Bypass Detected"), 403
-
-    # 2. चेक करें कि टोकन cache_code से मैच करता है या नहीं
-    if token != cache_code:
-        send_telegram_alert(None, "0 seconds", "Bypass Detected (Token Mismatch)")
-        return get_error_html("Bypass Detected"), 403
-
-    try:
-        # 3. टाइमस्टैम्प को डिकोड करें
-        timestamp_str = base64.urlsafe_b64decode(cache_ts).decode('utf-8')
-        aes_key = timestamp_str.ljust(32, '0').encode('utf-8')
-
-        # 4. AES कोड को डिकोड और डिक्रिप्ट करें
-        encrypted_data = base64.urlsafe_b64decode(cache_code)
-        iv = encrypted_data[:16]
-        ciphertext = encrypted_data[16:]
-
-        cipher = AES.new(aes_key, AES.MODE_CBC, iv)
-        decrypted_bytes = unpad(cipher.decrypt(ciphertext), AES.block_size)
-        decrypted_str = decrypted_bytes.decode('utf-8')
-
-        # 5. Profile ID और Original Timestamp निकालें
-        profile_id, original_ts_str = decrypted_str.split("::")
-        original_ts = float(original_ts_str)
-
-    except Exception as e:
-        send_telegram_alert(None, "0 seconds", f"Bypass Detected (Decryption Failed: {str(e)})")
-        return get_error_html("Bypass Detected"), 403
-
-    # 6. समय की गणना करें (कितने टाइम में वेरीफाई हुआ)
-    tz_kolkata = pytz.timezone('Asia/Kolkata')
-    current_ts = datetime.now(tz_kolkata).timestamp()
-    elapsed_seconds = current_ts - original_ts
+    session_token = request.cookies.get('session_token')
     
+    # सिक्यूरिटी चेक 1: अगर टोकन या कुकीज़ नहीं हैं
+    if not token or not session_token:
+        return get_error_html("Bypass Detected"), 403
+
+    # सिक्यूरिटी चेक 2: अगर URL का टोकन और कुकीज़ का टोकन मैच नहीं होता है 
+    if token != session_token:
+        return get_error_html("Bypass Detected (Session Mismatch)"), 403
+
+    # स्टेप 1: डेटाबेस में टोकन ढूँढें
+    key_record = keys_pool_collection.find_one({"token": token})
+    
+    if not key_record:
+        return get_error_html("Invalid Token"), 403
+
+    profile_id = key_record.get("assigned_to")
+    assigned_at = key_record.get("assigned_at")
+
+    # अगर टोकन किसी को असाइन नहीं है या यूज़र का समय पूरा हो चुका है
+    if not profile_id:
+        return get_error_html("Token is expired or already used"), 403
+
+    # स्टेप 2: समय की गणना (Time Taken)
+    current_ts = time.time()
+    elapsed_seconds = current_ts - assigned_at
     elapsed_minutes = int(elapsed_seconds // 60)
     remaining_seconds = int(elapsed_seconds % 60)
     exact_time_str = f"{elapsed_minutes} minutes {remaining_seconds} seconds"
 
-    # 7. MongoDB को अपडेट करें (सीधे profile_id_verified को True सेट करें)
+    # -------------------------------------------------------------------------
+    # स्टेप 3: यूज़र को वेरीफाई करें और 'verified_on' टाइमस्टैम्प सेव करें
+    # -------------------------------------------------------------------------
     collection.update_one(
         {"profile_id": profile_id}, 
-        {"$set": {"profile_id_verified": True}}
+        {"$set": {
+            "profile_id_verified": True,
+            "verified_on": current_ts
+        }}
     )
 
-    # 8. टेलीग्राम पर वेरिफिकेशन सक्सेस और समय का मैसेज भेजें
+    # स्टेप 4: की (Key) को वापस फ्री कर दें ताकि कोई और इसे इस्तेमाल कर सके
+    keys_pool_collection.update_one(
+        {"token": token},
+        {"$set": {"assigned_to": None, "assigned_at": None}}
+    )
+
+    # स्टेप 5: टेलीग्राम अलर्ट भेजें
     try:
         bot_token = "8292521812:AAFukmxihMZId4elnEA6Ne_KKYw4NrMXwuc"
         chat_id = "-1004433335002"
         telegram_text = f"New key verified\nUser Profile ID: {profile_id}\nTime Taken: {exact_time_str}"
         telegram_api_url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
         
-        # टेलीग्राम API को रिक्वेस्ट भेजें
         requests.post(telegram_api_url, json={"chat_id": chat_id, "text": telegram_text}, timeout=5)
     except Exception as e:
         print(f"Telegram notification failed: {str(e)}")
 
-    # 9. सफलता (Success) HTML लौटाएं
-    return get_success_html(), 200
-
-@app.route('/api/v2/keyaccess', methods=['GET'])
-def verify_key_access():
-    token = request.args.get('token')
-    cache_ts = request.cookies.get('cache_ts')
-    cache_code = request.cookies.get('cache_code')
-
-    # 1. Check Cookies and Token existence
-    if not cache_ts or not cache_code or not token:
-        send_telegram_alert(None, "0 seconds", "Bypass Detected (Missing Cookies or Token)")
-        return get_error_html("Bypass Detected"), 403
-
-    # 2. Check if token matches cache_code
-    if token != cache_code:
-        send_telegram_alert(None, "0 seconds", "Bypass Detected (Token Mismatch)")
-        return get_error_html("Bypass Detected"), 403
-
-    try:
-        # 3. Decode Timestamp
-        timestamp_str = base64.urlsafe_b64decode(cache_ts).decode('utf-8')
-        aes_key = timestamp_str.ljust(32, '0').encode('utf-8')
-
-        # 4. Decode and Decrypt AES Code
-        encrypted_data = base64.urlsafe_b64decode(cache_code)
-        iv = encrypted_data[:16]
-        ciphertext = encrypted_data[16:]
-
-        cipher = AES.new(aes_key, AES.MODE_CBC, iv)
-        decrypted_bytes = unpad(cipher.decrypt(ciphertext), AES.block_size)
-        decrypted_str = decrypted_bytes.decode('utf-8')
-
-        # 5. Extract Profile ID and Original Timestamp
-        profile_id, original_ts_str = decrypted_str.split("::")
-        original_ts = float(original_ts_str)
-
-    except Exception as e:
-        send_telegram_alert(None, "0 seconds", f"Bypass Detected (Decryption Failed: {str(e)})")
-        return get_error_html("Bypass Detected"), 403
-
-    # 6. Calculate Time Difference
-    tz_kolkata = pytz.timezone('Asia/Kolkata')
-    current_ts = datetime.now(tz_kolkata).timestamp()
-    elapsed_seconds = current_ts - original_ts
+    # स्टेप 6: सक्सेस पेज दिखाएं और सुरक्षा के लिए पुरानी कुकीज़ को तुरंत डिलीट कर दें
+    resp = make_response(get_success_html())
+    resp.set_cookie('session_token', '', max_age=0)
     
+    return resp, 200
+@app.route('/api/v2/keyaccess', methods=['GET'])
+def verify_key_access_v2():
+    token = request.args.get('token')
+    session_token = request.cookies.get('session_token')
+    
+    # सिक्यूरिटी चेक 1: अगर टोकन या कुकीज़ नहीं हैं
+    if not token or not session_token:
+        return get_error_html("Bypass Detected (Missing Cookie or Token - Please use the same browser)"), 403
+
+    # सिक्यूरिटी चेक 2: अगर URL का टोकन और कुकीज़ का टोकन मैच नहीं होता है 
+    if token != session_token:
+        return get_error_html("Bypass Detected (Session Mismatch)"), 403
+
+    # स्टेप 1: डेटाबेस में टोकन ढूँढें
+    key_record = keys_pool_collection.find_one({"token": token})
+    
+    if not key_record:
+        return get_error_html("Invalid Token"), 403
+
+    profile_id = key_record.get("assigned_to")
+    assigned_at = key_record.get("assigned_at")
+
+    # अगर टोकन किसी को असाइन नहीं है या यूज़र का समय पूरा हो चुका है
+    if not profile_id:
+        return get_error_html("Token is expired or already used"), 403
+
+    # स्टेप 2: समय की गणना (Time Taken)
+    current_ts = time.time()
+    elapsed_seconds = current_ts - assigned_at
     elapsed_minutes = int(elapsed_seconds // 60)
     remaining_seconds = int(elapsed_seconds % 60)
     exact_time_str = f"{elapsed_minutes} minutes {remaining_seconds} seconds"
 
-    # 7. Check if time is less than 2.5 minutes (150 seconds)
-    if elapsed_seconds < 150:
-        send_telegram_alert(profile_id, exact_time_str, "Fast Bypass Detected (< 2.5 mins)")
-        return get_error_html("Bypass detected referer not found"), 403
+    bot_token = "8292521812:AAFukmxihMZId4elnEA6Ne_KKYw4NrMXwuc"
+    chat_id = "-1004314655959"  # नया चैनल ID
+    telegram_api_url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
 
-    # 8. Update MongoDB (Set profile_id_verified to True)
+    # -------------------------------------------------------------------------
+    # नया अपडेट: 2.5 मिनट (150 सेकंड) वाला फास्ट बायपास चेक
+    # -------------------------------------------------------------------------
+    if elapsed_seconds < 150:
+        try:
+            telegram_text_sus = f"Suspicious activity found\nUser Profile ID: {profile_id}\nTime Taken: {exact_time_str}"
+            requests.post(telegram_api_url, json={"chat_id": chat_id, "text": telegram_text_sus}, timeout=5)
+        except Exception as e:
+            print(f"Telegram notification failed: {str(e)}")
+            
+        # यूज़र को एरर दिखाएं
+        return get_error_html("Bypass detected referer not found"), 403
+    # -------------------------------------------------------------------------
+
+    # स्टेप 3: अगर 2.5 मिनट से ऊपर हो गया है, तो यूज़र को वेरीफाई करें
     collection.update_one(
         {"profile_id": profile_id}, 
-        {"$set": {"profile_id_verified": True}}
+        {"$set": {
+            "profile_id_verified": True,
+            "verified_on": current_ts
+        }}
     )
 
-    # 9. Return Success HTML
-    return get_success_html(), 200
+    # स्टेप 4: की (Key) को वापस फ्री कर दें ताकि कोई और इसे इस्तेमाल कर सके
+    keys_pool_collection.update_one(
+        {"token": token},
+        {"$set": {"assigned_to": None, "assigned_at": None}}
+    )
+
+    # स्टेप 5: सक्सेस का टेलीग्राम अलर्ट भेजें
+    try:
+        telegram_text = f"New key verified\nUser Profile ID: {profile_id}\nTime Taken: {exact_time_str}"
+        requests.post(telegram_api_url, json={"chat_id": chat_id, "text": telegram_text}, timeout=5)
+    except Exception as e:
+        print(f"Telegram notification failed: {str(e)}")
+
+    # स्टेप 6: सक्सेस पेज दिखाएं और सुरक्षा के लिए पुरानी कुकीज़ को तुरंत डिलीट कर दें
+    resp = make_response(get_success_html())
+    resp.set_cookie('session_token', '', max_age=0)
+    
+    return resp, 200
 
 @app.route('/api/v2/checkmyprofile', methods=['GET'])
 def check_my_profile():
