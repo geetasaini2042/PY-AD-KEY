@@ -78,7 +78,7 @@ TELEGRAM_BOT_TOKEN = "8292521812:AAFukmxihMZId4elnEA6Ne_KKYw4NrMXwuc"
 TELEGRAM_CHAT_ID = "6150091802"
 primeuserdb = client["prime_study_db"]
 users_collection = primeuserdb["users_data"]
-
+keys_pool_collection = db["keys_pool_collection"]
 # JSON डेटा लोड करने के लिए फंक्शन
 def load_apps_data():
     try:
