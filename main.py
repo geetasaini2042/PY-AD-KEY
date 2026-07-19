@@ -745,11 +745,11 @@ def verify_key_access_v2():
     
     # सिक्यूरिटी चेक 1: अगर टोकन या कुकीज़ नहीं हैं
     if not token or not session_token:
-        return get_error_html("Bypass Detected (Missing Cookie or Token - Please use the same browser)"), 403
+        return get_error_html("Bypass Detected"), 403
 
     # सिक्यूरिटी चेक 2: अगर URL का टोकन और कुकीज़ का टोकन मैच नहीं होता है 
     if token != session_token:
-        return get_error_html("Bypass Detected (Session Mismatch)"), 403
+        return get_error_html("Bypass Detected"), 403
 
     # स्टेप 1: डेटाबेस में टोकन ढूँढें
     key_record = keys_pool_collection.find_one({"token": token})
@@ -778,7 +778,7 @@ def verify_key_access_v2():
     # -------------------------------------------------------------------------
     # नया अपडेट: 2.5 मिनट (150 सेकंड) वाला फास्ट बायपास चेक
     # -------------------------------------------------------------------------
-    if elapsed_seconds < 150:
+    if elapsed_seconds < 165:
         try:
             telegram_text_sus = f"Suspicious activity found\nUser Profile ID: {profile_id}\nTime Taken: {exact_time_str}"
             requests.post(telegram_api_url, json={"chat_id": chat_id, "text": telegram_text_sus}, timeout=5)
@@ -786,7 +786,7 @@ def verify_key_access_v2():
             print(f"Telegram notification failed: {str(e)}")
             
         # यूज़र को एरर दिखाएं
-        return get_error_html("Bypass detected referer not found"), 403
+        return get_error_html("Bypass detected! Your Device has been Blocked!"), 403
     # -------------------------------------------------------------------------
 
     # स्टेप 3: अगर 2.5 मिनट से ऊपर हो गया है, तो यूज़र को वेरीफाई करें
