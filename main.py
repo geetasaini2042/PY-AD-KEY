@@ -723,7 +723,7 @@ def verify_api_access_me():
 
     # स्टेप 5: टेलीग्राम अलर्ट भेजें
     try:
-        bot_token = "8292521812:AAFukmxihMZId4elnEA6Ne_KKYw4NrMXwuc"
+        bot_token = "8292521812:AAEn6cNZAp2pypSnb0FAMkO_a56Cu9GoRLw"
         chat_id = "-1004433335002"
         telegram_text = f"New key verified\nUser Profile ID: {profile_id}\nTime Taken: {exact_time_str}"
         telegram_api_url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
@@ -771,7 +771,7 @@ def verify_key_access_v2():
     remaining_seconds = int(elapsed_seconds % 60)
     exact_time_str = f"{elapsed_minutes} minutes {remaining_seconds} seconds"
 
-    bot_token = "8292521812:AAFukmxihMZId4elnEA6Ne_KKYw4NrMXwuc"
+    bot_token = "8292521812:AAEn6cNZAp2pypSnb0FAMkO_a56Cu9GoRLw"
     chat_id = "-1004314655959"  # नया चैनल ID
     telegram_api_url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
 
