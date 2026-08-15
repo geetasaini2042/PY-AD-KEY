@@ -590,7 +590,7 @@ def generate_short_link():
     host_url = request.host_url.rstrip('/')  
 
     # डोमेन के अनुसार API और Path सेट करें
-    if 'study.edumate.life' in request_host:
+    if 'key.lnkz.tech' in request_host:
         api_key = "20612dab97c48d8bf10f686f44eda1000d8feac0"
         access_path = "/api/v2/keyaccess"
     elif 'key.lnkz.tech' in request_host:
