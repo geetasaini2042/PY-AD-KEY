@@ -555,120 +555,6 @@ def get_success_html():
 def generate_random_token(length=10):
     return ''.join(random.choices(string.ascii_letters + string.digits, k=length))
 
-@app.route('/api/v2/generate_shortlink', methods=['GET'])
-def generate_short_link():
-    profile_id = request.args.get('profile_id')
-    if not profile_id:
-        return jsonify({"error": "Profile ID not found"}), 400
-
-    current_ts = time.time()
-    
-    # -------------------------------------------------------------------------
-    # 1. चेक करें कि यूज़र वेरीफाइड है और 'verified_on' 24 घंटे (86400 सेकंड) के अंदर है
-    # -------------------------------------------------------------------------
-    user_record = collection.find_one({"profile_id": profile_id})
-    
-    if user_record and user_record.get("profile_id_verified") == True:
-        verified_on = user_record.get("verified_on", 0)
-        
-        # अगर वेरीफाई हुए 24 घंटे (86400 सेकंड) से कम समय हुआ है, तो सीधा सक्सेस पेज दिखाएं
-        if (current_ts - verified_on) < 86400:
-            return get_success_html(), 200
-
-    # अगर वेरीफाइड नहीं है या 24 घंटे पूरे हो गए हैं, तो पुरानी एंट्री डिलीट करें
-    collection.delete_many({"profile_id": profile_id})
-    
-    # फ्रेश एंट्री इन्सर्ट करें (ताकि पहले का कोई बग न रहे)
-    collection.insert_one({
-        "profile_id": profile_id,
-        "profile_id_verified": False,
-        "timestamp": current_ts
-    })
-    # -------------------------------------------------------------------------
-
-    request_host = request.host  
-    host_url = request.host_url.rstrip('/')  
-
-    # डोमेन के अनुसार API और Path सेट करें
-    if 'key.lnkz.tech' in request_host:
-        api_key = "20612dab97c48d8bf10f686f44eda1000d8feac0"
-        access_path = "/api/v2/keyaccess"
-    elif 'key.lnkz.tech' in request_host:
-        api_key = "2c2c2d013bb11762d35eaf99713077879d43bf91"
-        access_path = "/api/apiaccessme/"
-    else:
-        return jsonify({"error": "अमान्य डोमेन (Invalid Domain)"}), 403
-
-    # स्टेप 1: जो कीज़ (Keys) 15 मिनट (900 सेकंड) से ज़्यादा समय से अटकी हैं, उन्हें फ्री करें
-    keys_pool_collection.update_many(
-        {
-            "domain": request_host,
-            "assigned_to": {"$ne": None}, 
-            "assigned_at": {"$lt": current_ts - 900}
-        },
-        {"$set": {"assigned_to": None, "assigned_at": None}}
-    )
-
-    assigned_token = None
-    shortened_url = None
-
-    # स्टेप 2: चेक करें कि क्या इस यूज़र के पास पहले से कोई एक्टिव की (Key) है?
-    user_existing_key = keys_pool_collection.find_one({"assigned_to": profile_id, "domain": request_host})
-    
-    if user_existing_key:
-        assigned_token = user_existing_key["token"]
-        shortened_url = user_existing_key["shortened_url"]
-        
-        # यूज़र के वापस आने पर उसका Timestamp अपडेट करें ताकि उसे और 15 मिनट मिल सकें
-        keys_pool_collection.update_one(
-            {"_id": user_existing_key["_id"]},
-            {"$set": {"assigned_at": current_ts}}
-        )
-    else:
-        # स्टेप 3: डेटाबेस से कोई 1 'फ्री' की (Key) निकालें
-        free_key = keys_pool_collection.find_one_and_update(
-            {"assigned_to": None, "domain": request_host}, 
-            {"$set": {"assigned_to": profile_id, "assigned_at": current_ts}}, 
-            return_document=True
-        )
-
-        if free_key:
-            assigned_token = free_key["token"]
-            shortened_url = free_key["shortened_url"]
-        else:
-            # स्टेप 4: अगर कोई भी की फ्री नहीं है, तो एक नई की बनाएँ
-            new_token = generate_random_token(12)
-            long_url = f"{host_url}{access_path}?token={new_token}"
-            
-            shortener_api_url = "https://arolinks.com/api"
-            try:
-                response = requests.get(shortener_api_url, params={"api": api_key, "url": long_url})
-                data = response.json()
-                
-                if data.get("status") == "success":
-                    shortened_url = data.get("shortenedUrl")
-                    assigned_token = new_token
-                else:
-                    return jsonify({"error": "URL शार्ट करने में विफल"}), 500
-            except Exception as e:
-                return jsonify({"error": str(e)}), 500
-
-            # नई की (Key) को डेटाबेस में सेव करें ताकि Key Pool की संख्या बढ़ सके
-            new_key_record = {
-                "token": new_token,
-                "domain": request_host,
-                "shortened_url": shortened_url,
-                "assigned_to": profile_id,
-                "assigned_at": current_ts
-            }
-            keys_pool_collection.insert_one(new_key_record)
-
-    # स्टेप 5: शार्ट यूआरएल पर भेजें और कुकीज़ को नए 30 मिनट (1800 सेकंड) के लिए सेट करें
-    resp = make_response(redirect(shortened_url))
-    resp.set_cookie('session_token', assigned_token, max_age=1800)
-    
-    return resp
-
 
 # दोनों राउट्स (Routes) को एक ही फंक्शन पर मैप कर दिया गया है
 @app.route('/api/apiaccessme/', methods=['GET'])
@@ -737,7 +623,119 @@ def verify_api_access_me():
     resp.set_cookie('session_token', '', max_age=0)
     
     return resp, 200
+@app.route('/api/v2/generate_shortlink', methods=['GET'])
+def generate_short_link():
+    profile_id = request.args.get('profile_id')
+    if not profile_id:
+        return jsonify({"error": "Profile ID not found"}), 400
 
+    current_ts = time.time()
+    
+    # -------------------------------------------------------------------------
+    # 1. चेक करें कि यूज़र वेरीफाइड है और 'verified_on' 24 घंटे (86400 सेकंड) के अंदर है
+    # -------------------------------------------------------------------------
+    user_record = collection.find_one({"profile_id": profile_id})
+    
+    if user_record and user_record.get("profile_id_verified") == True:
+        verified_on = user_record.get("verified_on", 0)
+        
+        # अगर वेरीफाई हुए 24 घंटे से कम समय हुआ है, तो सीधा सक्सेस पेज दिखाएं
+        if (current_ts - verified_on) < 86400:
+            return get_success_html(), 200
+
+    # अगर वेरीफाइड नहीं है या 24 घंटे पूरे हो गए हैं, तो पुरानी एंट्री डिलीट करें
+    collection.delete_many({"profile_id": profile_id})
+    
+    # फ्रेश एंट्री इन्सर्ट करें
+    collection.insert_one({
+        "profile_id": profile_id,
+        "profile_id_verified": False,
+        "timestamp": current_ts
+    })
+    # -------------------------------------------------------------------------
+
+    host_url = request.host_url.rstrip('/')  
+
+    # डोमेन डिटेल्स फिक्स कर दी गई हैं
+    api_key = "20612dab97c48d8bf10f686f44eda1000d8feac0"
+    access_path = "/api/v2/keyaccess"
+    
+    # डेटाबेस में पुराने एक्सपायर्ड लिंक्स से बचने के लिए नया आइडेंटिफायर इस्तेमाल कर रहे हैं
+    db_domain_identifier = "key.lnkz.tech_v2" 
+
+    # स्टेप 1: जो कीज़ (Keys) 15 मिनट से ज़्यादा समय से अटकी हैं, उन्हें फ्री करें (सिर्फ नई एंट्रीज़ के लिए)
+    keys_pool_collection.update_many(
+        {
+            "domain": db_domain_identifier,
+            "assigned_to": {"$ne": None}, 
+            "assigned_at": {"$lt": current_ts - 900}
+        },
+        {"$set": {"assigned_to": None, "assigned_at": None}}
+    )
+
+    assigned_token = None
+    shortened_url = None
+
+    # स्टेप 2: चेक करें कि क्या इस यूज़र के पास पहले से कोई एक्टिव की (Key) है?
+    user_existing_key = keys_pool_collection.find_one({
+        "assigned_to": profile_id, 
+        "domain": db_domain_identifier
+    })
+    
+    if user_existing_key:
+        assigned_token = user_existing_key["token"]
+        shortened_url = user_existing_key["shortened_url"]
+        
+        # यूज़र के वापस आने पर उसका Timestamp अपडेट करें ताकि उसे और 15 मिनट मिल सकें
+        keys_pool_collection.update_one(
+            {"_id": user_existing_key["_id"]},
+            {"$set": {"assigned_at": current_ts}}
+        )
+    else:
+        # स्टेप 3: डेटाबेस से कोई 1 'फ्री' की (Key) निकालें
+        free_key = keys_pool_collection.find_one_and_update(
+            {"assigned_to": None, "domain": db_domain_identifier}, 
+            {"$set": {"assigned_to": profile_id, "assigned_at": current_ts}}, 
+            return_document=True
+        )
+
+        if free_key:
+            assigned_token = free_key["token"]
+            shortened_url = free_key["shortened_url"]
+        else:
+            # स्टेप 4: अगर कोई भी की फ्री नहीं है, तो एक नई की बनाएँ
+            new_token = generate_random_token(12)
+            long_url = f"{host_url}{access_path}?token={new_token}"
+            
+            shortener_api_url = "https://arolinks.com/api"
+            try:
+                response = requests.get(shortener_api_url, params={"api": api_key, "url": long_url})
+                data = response.json()
+                
+                if data.get("status") == "success":
+                    shortened_url = data.get("shortenedUrl")
+                    assigned_token = new_token
+                else:
+                    return jsonify({"error": "URL शार्ट करने में विफल"}), 500
+            except Exception as e:
+                return jsonify({"error": str(e)}), 500
+
+            # नई की (Key) को डेटाबेस में सेव करें (नए डोमेन आइडेंटिफायर 'key.lnkz.tech_v2' के साथ)
+            new_key_record = {
+                "token": new_token,
+                "domain": db_domain_identifier, 
+                "shortened_url": shortened_url,
+                "assigned_to": profile_id,
+                "assigned_at": current_ts,
+                "created_at": current_ts
+            }
+            keys_pool_collection.insert_one(new_key_record)
+
+    # स्टेप 5: शार्ट यूआरएल पर भेजें और कुकीज़ को नए 30 मिनट के लिए सेट करें
+    resp = make_response(redirect(shortened_url))
+    resp.set_cookie('session_token', assigned_token, max_age=1800)
+    
+    return resp
 @app.route('/api/v2/keyaccess', methods=['GET'])
 def verify_key_access_v2():
     token = request.args.get('token')
@@ -776,9 +774,9 @@ def verify_key_access_v2():
     telegram_api_url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
 
     # -------------------------------------------------------------------------
-    # नया अपडेट: 2.5 मिनट (150 सेकंड) वाला फास्ट बायपास चेक
+    # अपडेट: 2.5 मिनट (150 सेकंड) वाला फास्ट बायपास चेक (165 से 150 किया गया)
     # -------------------------------------------------------------------------
-    if elapsed_seconds < 165:
+    if elapsed_seconds < 150:
         try:
             telegram_text_sus = f"Suspicious activity found\nUser Profile ID: {profile_id}\nTime Taken: {exact_time_str}"
             requests.post(telegram_api_url, json={"chat_id": chat_id, "text": telegram_text_sus}, timeout=5)
@@ -789,7 +787,7 @@ def verify_key_access_v2():
         return get_error_html("Bypass detected! Your Device has been Blocked!"), 403
     # -------------------------------------------------------------------------
 
-    # स्टेप 3: अगर 2.5 मिनट से ऊपर हो गया है, तो यूज़र को वेरीफाई करें
+    # स्टेप 3: अगर 2.5 मिनट (150 सेकंड) से ऊपर हो गया है, तो यूज़र को वेरीफाई करें
     collection.update_one(
         {"profile_id": profile_id}, 
         {"$set": {
@@ -798,7 +796,7 @@ def verify_key_access_v2():
         }}
     )
 
-    # स्टेप 4: की (Key) को वापस फ्री कर दें ताकि कोई और इसे इस्तेमाल कर सके
+    # स्टेप 4: की (Key) को वापस फ्री कर दें ताकि नया यूज़र इसे इस्तेमाल कर सके
     keys_pool_collection.update_one(
         {"token": token},
         {"$set": {"assigned_to": None, "assigned_at": None}}
@@ -864,7 +862,7 @@ def check_my_profile():
     # 24 घंटे में 86400 सेकंड होते हैं
     if elapsed_seconds >= 86400:
         # -----------------------------------------------------------------
-        # नया अपडेट: एक्सपायर हो चुके रिकॉर्ड को डेटाबेस से डिलीट कर दें
+        # एक्सपायर हो चुके रिकॉर्ड को डेटाबेस से डिलीट कर दें
         # -----------------------------------------------------------------
         collection.delete_many({"profile_id": profile_id})
         
@@ -879,7 +877,7 @@ def check_my_profile():
         "message": "Profile is verified and active",
         "profile_id": profile_id
     }), 200
-
+    
 @app.route('/PW/schedule-details', methods=['GET'])
 def proxy_schedule_details():
     # आने वाले URL से सभी पैरामीटर्स (query string) प्राप्त करें
