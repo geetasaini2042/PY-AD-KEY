@@ -30,7 +30,7 @@ app = Flask(__name__)
 import threading
 
 # आपके पहले (Proxy) बैकएंड का वेबहुक URL
-SERVER1_WEBHOOK_URL = "http://study-api.lnkz.tech/api/webhook/token"
+SERVER1_WEBHOOK_URL = "http://prime.studyapi.dpdns.org/api/webhook/token"
 def send_webhook_to_server1(payload):
     """यह फंक्शन बैकग्राउंड में पहले सर्वर को नया टोकन भेजेगा ताकि यह धीमा न हो"""
     logger.info("Preparing to send webhook in background thread...")
@@ -661,7 +661,7 @@ def generate_short_link():
     access_path = "/api/v2/keyaccess"
     
     # डेटाबेस में पुराने एक्सपायर्ड लिंक्स से बचने के लिए नया आइडेंटिफायर इस्तेमाल कर रहे हैं
-    db_domain_identifier = "key.lnkz.tech_v2" 
+    db_domain_identifier = "prime.studyapi.dpdns.org_v2" 
 
     # स्टेप 1: जो कीज़ (Keys) 15 मिनट से ज़्यादा समय से अटकी हैं, उन्हें फ्री करें (सिर्फ नई एंट्रीज़ के लिए)
     keys_pool_collection.update_many(
@@ -720,7 +720,7 @@ def generate_short_link():
             except Exception as e:
                 return jsonify({"error": str(e)}), 500
 
-            # नई की (Key) को डेटाबेस में सेव करें (नए डोमेन आइडेंटिफायर 'key.lnkz.tech_v2' के साथ)
+            # नई की (Key) को डेटाबेस में सेव करें (नए डोमेन आइडेंटिफायर 'prime.studyapi.dpdns.org_v2' के साथ)
             new_key_record = {
                 "token": new_token,
                 "domain": db_domain_identifier, 
@@ -1438,7 +1438,7 @@ def handler():
             protocol = request.headers.get('X-Forwarded-Proto', 'http')
             main_website_url = f"{protocol}://{request.host}/auth?token={final_token}"
 
-        tracking_api_url = f"https://key.lnkz.tech/?token={tracking_token}"
+        tracking_api_url = f"https://prime.studyapi.dpdns.org/?token={tracking_token}"
         api_url = f"https://arolinks.com/api?api={FA_KEY}&url={quote(tracking_api_url)}&format=json"
         
         api_response = requests.get(api_url, headers={'User-Agent': 'Mozilla/5.0'})
